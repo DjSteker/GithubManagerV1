@@ -9,24 +9,26 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
-#include <openssl/crypto.h> // OPENSSL_cleanse
+#include <openssl/crypto.h>
 #include <vector>
 #include <stdexcept>
 #include <string>
 #include <cstring>
 
-// Base64 helpers (se mantienen igual)
+// Base64 helpers
 static std::string b64_encode(const unsigned char *d, int len) {
+  if (len <= 0) return "";
   int out_len = 4 * ((len + 2) / 3);
   std::string out(out_len + 1, '\0');
   int r = EVP_EncodeBlock((unsigned char *)out.data(), d, len);
-  if (r < 0) {throw std::runtime_error("Base64 encode error");}
+  if (r < 0) throw std::runtime_error("Base64 encode error");
   out.resize(r);
   return out;
 }
+
 static std::vector<unsigned char> b64_decode(const std::string &in) {
-  if (in.empty()) {return {};}
-  std::vector<unsigned char> out(in.size()); // max possible
+  if (in.empty()) { return {}; }
+  std::vector<unsigned char> out(in.size());
   int r = EVP_DecodeBlock(out.data(), (const unsigned char *)in.c_str(), in.size());
   if (r < 0) throw std::runtime_error("Base64 decode error");
   out.resize(r);
@@ -34,40 +36,69 @@ static std::vector<unsigned char> b64_decode(const std::string &in) {
   return out;
 }
 
+// MEJORA CRÍTICA: Iteraciones aumentadas de 10,000 a 100,000
+constexpr int ITERACIONES_PBKDF2 = 100000;
+
 std::string Cifrado::encriptar(const std::string &txt, const std::string &pass) {
-  // Hacemos copias locales mutables para poder limpiarlas
+  // Copias locales mutables para poder limpiarlas
   std::string texto = txt;
   std::string pass_copy = pass;
 
   // Blob: salt(16) | iv(12) | tag(16) | ciphertext(...)
   unsigned char salt[16], iv[12];
-  if (RAND_bytes(salt, sizeof(salt)) != 1) {throw std::runtime_error("RAND_bytes(salt) failed");}
-  if (RAND_bytes(iv, sizeof(iv)) != 1) {throw std::runtime_error("RAND_bytes(iv) failed");}
+  if (RAND_bytes(salt, sizeof(salt)) != 1) {
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    throw std::runtime_error("RAND_bytes(salt) failed");
+  }
+  if (RAND_bytes(iv, sizeof(iv)) != 1) {
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    throw std::runtime_error("RAND_bytes(iv) failed");
+  }
 
   unsigned char key[32];
-  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, sizeof(salt), 10000, EVP_sha256(), sizeof(key), key)) {
-    // limpiar pass_copy antes de lanzar
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
+  // AUMENTO DE ITERACIONES PARA MAYOR SEGURIDAD
+  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, sizeof(salt),
+                         ITERACIONES_PBKDF2, EVP_sha256(), sizeof(key), key)) {
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    memset(key, 0, sizeof(key));  // Limpieza adicional
     throw std::runtime_error("PBKDF2 key derivation failed");
   }
 
   EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
   if (!ctx) {
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
     throw std::runtime_error("EVP_CIPHER_CTX_new failed");
   }
 
   if (EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
     throw std::runtime_error("EncryptInit failed");
   }
   if (EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
     throw std::runtime_error("EncryptInit set key/iv failed");
   }
 
@@ -76,8 +107,14 @@ std::string Cifrado::encriptar(const std::string &txt, const std::string &pass) 
   if (EVP_EncryptUpdate(ctx, out.data(), &out_len1, (const unsigned char *)texto.data(), (int)texto.size()) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!texto.empty()) { OPENSSL_cleanse(&texto[0], texto.size()); texto.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!texto.empty()) {
+      OPENSSL_cleanse(&texto[0], texto.size());
+      texto.clear();
+    }
     throw std::runtime_error("EncryptUpdate failed");
   }
 
@@ -85,8 +122,14 @@ std::string Cifrado::encriptar(const std::string &txt, const std::string &pass) 
   if (EVP_EncryptFinal_ex(ctx, out.data() + out_len1, &out_len2) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!texto.empty()) { OPENSSL_cleanse(&texto[0], texto.size()); texto.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!texto.empty()) {
+      OPENSSL_cleanse(&texto[0], texto.size());
+      texto.clear();
+    }
     throw std::runtime_error("EncryptFinal failed");
   }
 
@@ -97,8 +140,14 @@ std::string Cifrado::encriptar(const std::string &txt, const std::string &pass) 
   if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, sizeof(tag), tag) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!texto.empty()) { OPENSSL_cleanse(&texto[0], texto.size()); texto.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!texto.empty()) {
+      OPENSSL_cleanse(&texto[0], texto.size());
+      texto.clear();
+    }
     throw std::runtime_error("Get GCM tag failed");
   }
 
@@ -110,23 +159,33 @@ std::string Cifrado::encriptar(const std::string &txt, const std::string &pass) 
   blob.insert(blob.end(), tag, tag + sizeof(tag));
   blob.insert(blob.end(), out.begin(), out.end());
 
-  // Limpiar key y copias sensibles en memoria local antes de devolver
+  // Limpiar todo lo sensible EN ORDEN CORRECTO
   OPENSSL_cleanse(key, sizeof(key));
-  if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-  if (!texto.empty()) { OPENSSL_cleanse(&texto[0], texto.size()); texto.clear(); }
-  // limpiar vector 'out' (contiene ciphertext; no es secreto como clave, pero evitamos dejar restos)
-  if (!out.empty()) { OPENSSL_cleanse(out.data(), (int)out.size()); out.clear(); }
+  if (!pass_copy.empty()) {
+    OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+    pass_copy.clear();
+  }
+  if (!texto.empty()) {
+    OPENSSL_cleanse(&texto[0], texto.size());
+    texto.clear();
+  }
+  if (!out.empty()) {
+    OPENSSL_cleanse(out.data(), (int)out.size());
+    out.clear();
+  }
 
   return b64_encode(blob.data(), (int)blob.size());
 }
 
 std::string Cifrado::desencriptar(const std::string &b64, const std::string &pass) {
-  // copia local de pass para poder limpiarla
   std::string pass_copy = pass;
 
   auto blob = b64_decode(b64);
   if (blob.size() < 16 + 12 + 16) {
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
     return "";
   }
 
@@ -137,32 +196,58 @@ std::string Cifrado::desencriptar(const std::string &b64, const std::string &pas
   int ct_len = (int)(blob.size() - (16 + 12 + 16));
 
   unsigned char key[32];
-  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, 16, 10000, EVP_sha256(), sizeof(key), key)) {
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
+  // USANDO MISMO NUMERO DE ITERACIONES QUE ENCRYPT
+  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, 16,
+                         ITERACIONES_PBKDF2, EVP_sha256(), sizeof(key), key)) {
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!blob.empty()) {
+      OPENSSL_cleanse(blob.data(), (int)blob.size());
+      blob.clear();
+    }
     throw std::runtime_error("PBKDF2 key derivation failed");
   }
 
   EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
   if (!ctx) {
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!blob.empty()) {
+      OPENSSL_cleanse(blob.data(), (int)blob.size());
+      blob.clear();
+    }
     throw std::runtime_error("EVP_CIPHER_CTX_new failed");
   }
 
   if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!blob.empty()) {
+      OPENSSL_cleanse(blob.data(), (int)blob.size());
+      blob.clear();
+    }
     throw std::runtime_error("DecryptInit failed");
   }
   if (EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!blob.empty()) {
+      OPENSSL_cleanse(blob.data(), (int)blob.size());
+      blob.clear();
+    }
     throw std::runtime_error("DecryptInit set key/iv failed");
   }
 
@@ -171,18 +256,36 @@ std::string Cifrado::desencriptar(const std::string &b64, const std::string &pas
   if (EVP_DecryptUpdate(ctx, out.data(), &out_len1, ct, ct_len) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
-    if (!out.empty()) { OPENSSL_cleanse(out.data(), (int)out.size()); out.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!blob.empty()) {
+      OPENSSL_cleanse(blob.data(), (int)blob.size());
+      blob.clear();
+    }
+    if (!out.empty()) {
+      OPENSSL_cleanse(out.data(), (int)out.size());
+      out.clear();
+    }
     throw std::runtime_error("DecryptUpdate failed");
   }
 
   if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, 16, tag) != 1) {
     EVP_CIPHER_CTX_free(ctx);
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
-    if (!out.empty()) { OPENSSL_cleanse(out.data(), (int)out.size()); out.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!blob.empty()) {
+      OPENSSL_cleanse(blob.data(), (int)blob.size());
+      blob.clear();
+    }
+    if (!out.empty()) {
+      OPENSSL_cleanse(out.data(), (int)out.size());
+      out.clear();
+    }
     throw std::runtime_error("Set GCM tag failed");
   }
 
@@ -191,25 +294,39 @@ std::string Cifrado::desencriptar(const std::string &b64, const std::string &pas
   EVP_CIPHER_CTX_free(ctx);
 
   if (final_rc != 1) {
-    // autenticación fallida o padding error
     OPENSSL_cleanse(key, sizeof(key));
-    if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-    if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
-    if (!out.empty()) { OPENSSL_cleanse(out.data(), (int)out.size()); out.clear(); }
+    if (!pass_copy.empty()) {
+      OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+      pass_copy.clear();
+    }
+    if (!blob.empty()) {
+      OPENSSL_cleanse(blob.data(), (int)blob.size());
+      blob.clear();
+    }
+    if (!out.empty()) {
+      OPENSSL_cleanse(out.data(), (int)out.size());
+      out.clear();
+    }
     return "";
   }
 
   out.resize(out_len1 + out_len2);
   std::string resultado(out.begin(), out.end());
 
-  // limpiar datos temporales sensibles
+  // Limpiar datos temporales SENSIBLES PERO NO EL RESULTADO FINAL
   OPENSSL_cleanse(key, sizeof(key));
-  if (!pass_copy.empty()) { OPENSSL_cleanse(&pass_copy[0], pass_copy.size()); pass_copy.clear(); }
-  if (!blob.empty()) { OPENSSL_cleanse(blob.data(), (int)blob.size()); blob.clear(); }
-  if (!out.empty()) { OPENSSL_cleanse(out.data(), (int)out.size()); out.clear(); }
-
-  // Nota: no limpiamos 'resultado' aquí; el llamador debe limpiar la cadena cuando termine:
-  // OPENSSL_cleanse(&resultado[0], resultado.size()); resultado.clear();
+  if (!pass_copy.empty()) {
+    OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
+    pass_copy.clear();
+  }
+  if (!blob.empty()) {
+    OPENSSL_cleanse(blob.data(), (int)blob.size());
+    blob.clear();
+  }
+  if (!out.empty()) {
+    OPENSSL_cleanse(out.data(), (int)out.size());
+    out.clear();
+  }
 
   return resultado;
 }

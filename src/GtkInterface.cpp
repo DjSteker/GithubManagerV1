@@ -151,22 +151,28 @@ void run_git_upload(GtkWidget *boton, gpointer user_data) {
         LogData *ui = new LogData{ label_estado, g_strdup(err.c_str()) };
         g_idle_add(actualizar_ui_idle, ui);
         append_log_async(err);
-        goto finalizar_ui;
-      }
+      } else {
+        // === 3. Ejecutar operaciones Git (SUBIR) ===
+        bool esRepoNuevo = !fs::exists(fs::path(dir_path) / ".git");
 
-      // === 3. Ejecutar operaciones Git (SUBIR) ===
-      bool esRepoNuevo = !fs::exists(fs::path(dir_path) / ".git");
-
-      if (esRepoNuevo) {
-        append_log_async("📦 Repositorio nuevo detectado...\n");
-        if (!url_repo.empty()) {
-          if (fs::exists(dir_path)) {
-            bool vacio = (fs::directory_iterator(dir_path) == fs::directory_iterator());
-            if (!vacio) {
-              append_log_async("⚙️ Directorio existente: inicializando repo local...\n");
-              resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, url_repo);
+        if (esRepoNuevo) {
+          append_log_async("📦 Repositorio nuevo detectado...\n");
+          if (!url_repo.empty()) {
+            if (fs::exists(dir_path)) {
+              bool vacio = (fs::directory_iterator(dir_path) == fs::directory_iterator());
+              if (!vacio) {
+                append_log_async("⚙️ Directorio existente: inicializando repo local...\n");
+                resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, url_repo);
+              } else {
+                append_log_async("➡️ Clonando repositorio...\n");
+                resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
+                if (resultado.exito) {
+                  append_log_async("✅ Clonación exitosa.\n");
+                  resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
+                }
+              }
             } else {
-              append_log_async("➡️ Clonando repositorio...\n");
+              append_log_async("➡️ Clonando en directorio nuevo...\n");
               resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
               if (resultado.exito) {
                 append_log_async("✅ Clonación exitosa.\n");
@@ -174,38 +180,29 @@ void run_git_upload(GtkWidget *boton, gpointer user_data) {
               }
             }
           } else {
-            append_log_async("➡️ Clonando en directorio nuevo...\n");
-            resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
-            if (resultado.exito) {
-              append_log_async("✅ Clonación exitosa.\n");
-              resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
-            }
+            append_log_async("⚙️ Inicializando repo local (sin remote)...\n");
+            resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
           }
         } else {
-          append_log_async("⚙️ Inicializando repo local (sin remote)...\n");
+          append_log_async("🔄 Repositorio existente: subiendo cambios...\n");
           resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
         }
-      } else {
-        append_log_async("🔄 Repositorio existente: subiendo cambios...\n");
-        resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
+
+        // === 4. Mostrar resultado al usuario ===
+        std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
+        std::string msg_final = "Resultado: " + estadoStr + "\n";
+        msg_final += "Mensaje: " + resultado.mensaje + "\n\nSalida:\n" + resultado.salidaCompleta + "\n";
+
+        LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
+        g_idle_add(actualizar_ui_idle, ui);
+        append_log_async(msg_final);
       }
 
-      // === 4. Mostrar resultado al usuario ===
-      std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
-      std::string msg_final = "Resultado: " + estadoStr + "\n";
-      msg_final += "Mensaje: " + resultado.mensaje + "\n\nSalida:\n" + resultado.salidaCompleta + "\n";
-
-      LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
-      g_idle_add(actualizar_ui_idle, ui);
-      append_log_async(msg_final);
-
-finalizar_ui:
       g_idle_add([](gpointer d) -> gboolean {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      },
-                 nullptr);
+      }, nullptr);
 
     } catch (const std::exception &e) {
       std::string err = "💥 Excepción: ";
@@ -218,8 +215,7 @@ finalizar_ui:
       g_idle_add([](gpointer d) -> gboolean {
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      },
-                 nullptr);
+      }, nullptr);
     }
 
     // 🔒 LIMPIEZA SEGURA CENTRALIZADA DE TODOS LOS SECRETOS EN MEMORIA
@@ -255,32 +251,26 @@ void run_git_download(GtkWidget *boton, gpointer user_data) {
     try {
       if (dir_path.empty()) {
         append_log_async("❌ ERROR: Directorio local vacío\n");
-        goto finalizar_ui_download;
-      }
-
-      if (!fs::exists(fs::path(dir_path) / ".git")) {
+      } else if (!fs::exists(fs::path(dir_path) / ".git")) {
         append_log_async("❌ ERROR: El directorio no contiene un repositorio Git válido\n");
-        goto finalizar_ui_download;
+      } else {
+        append_log_async("⬇️ Descargando cambios desde repositorio remoto...\n");
+        ResultadoOperacionGit resultado = GestorGit::bajarCambios(dir_path, rama, token);
+
+        std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
+        std::string msg_final = "Resultado: " + estadoStr + "\n";
+        msg_final += "Mensaje: " + resultado.mensaje + "\n\nSalida:\n" + resultado.salidaCompleta + "\n";
+
+        LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
+        g_idle_add(actualizar_ui_idle, ui);
+        append_log_async(msg_final);
       }
 
-      append_log_async("⬇️ Descargando cambios desde repositorio remoto...\n");
-      ResultadoOperacionGit resultado = GestorGit::bajarCambios(dir_path, rama, token);
-
-      std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
-      std::string msg_final = "Resultado: " + estadoStr + "\n";
-      msg_final += "Mensaje: " + resultado.mensaje + "\n\nSalida:\n" + resultado.salidaCompleta + "\n";
-
-      LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
-      g_idle_add(actualizar_ui_idle, ui);
-      append_log_async(msg_final);
-
-finalizar_ui_download:
       g_idle_add([](gpointer d) -> gboolean {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      },
-                 nullptr);
+      }, nullptr);
 
     } catch (const std::exception &e) {
       std::string err = "💥 Excepción: ";
@@ -291,8 +281,7 @@ finalizar_ui_download:
       g_idle_add([](gpointer d) -> gboolean {
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      },
-                 nullptr);
+      }, nullptr);
     }
 
     auto limpiarSecret = [](std::string &s) {
@@ -325,50 +314,44 @@ void run_git_sync(GtkWidget *boton, gpointer user_data) {
     try {
       if (dir_path.empty()) {
         append_log_async("❌ ERROR: Directorio local vacío\n");
-        goto finalizar_ui_sync;
-      }
-
-      if (!fs::exists(fs::path(dir_path) / ".git")) {
+      } else if (!fs::exists(fs::path(dir_path) / ".git")) {
         append_log_async("❌ ERROR: El directorio no contiene un repositorio Git válido\n");
-        goto finalizar_ui_sync;
-      }
-
-      // Paso 1: Descargar cambios remotos
-      append_log_async("📥 Descargando cambios remotos (pull)...\n");
-      ResultadoOperacionGit resultadoPull = GestorGit::bajarCambios(dir_path, rama, token);
-      if (!resultadoPull.exito) {
-        append_log_async("⚠️ Advertencia en pull: " + resultadoPull.mensaje + "\n");
       } else {
-        append_log_async("✅ Pull completado\n");
+        // Paso 1: Descargar cambios remotos
+        append_log_async("📥 Descargando cambios remotos (pull)...\n");
+        ResultadoOperacionGit resultadoPull = GestorGit::bajarCambios(dir_path, rama, token);
+        if (!resultadoPull.exito) {
+          append_log_async("⚠️ Advertencia en pull: " + resultadoPull.mensaje + "\n");
+        } else {
+          append_log_async("✅ Pull completado\n");
+        }
+
+        // Paso 2: Subir cambios locales
+        append_log_async("📤 Subiendo cambios locales (push)...\n");
+        ResultadoOperacionGit resultadoPush = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
+        if (!resultadoPush.exito) {
+          append_log_async("⚠️ Advertencia en push: " + resultadoPush.mensaje + "\n");
+        } else {
+          append_log_async("✅ Push completado\n");
+        }
+
+        // Resultado final
+        bool ambosExito = resultadoPull.exito && resultadoPush.exito;
+        std::string estadoStr = ambosExito ? "✅ ÉXITO" : "⚠️ PARCIAL";
+        std::string msg_final = "Resultado: " + estadoStr + "\n";
+        msg_final += std::string("Pull: ") + (resultadoPull.exito ? "✅" : "❌") + " | Push: " + (resultadoPush.exito ? "✅" : "❌") + "\n";
+        msg_final += "\nDetalles:\n" + resultadoPull.salidaCompleta + "\n---\n" + resultadoPush.salidaCompleta + "\n";
+
+        LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
+        g_idle_add(actualizar_ui_idle, ui);
+        append_log_async(msg_final);
       }
 
-      // Paso 2: Subir cambios locales
-      append_log_async("📤 Subiendo cambios locales (push)...\n");
-      ResultadoOperacionGit resultadoPush = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
-      if (!resultadoPush.exito) {
-        append_log_async("⚠️ Advertencia en push: " + resultadoPush.mensaje + "\n");
-      } else {
-        append_log_async("✅ Push completado\n");
-      }
-
-      // Resultado final
-      bool ambosExito = resultadoPull.exito && resultadoPush.exito;
-      std::string estadoStr = ambosExito ? "✅ ÉXITO" : "⚠️ PARCIAL";
-      std::string msg_final = "Resultado: " + estadoStr + "\n";
-      msg_final += "Pull: " + (resultadoPull.exito ? "✅" : "❌") + " | Push: " + (resultadoPush.exito ? "✅" : "❌") + "\n";
-      msg_final += "\nDetalles:\n" + resultadoPull.salidaCompleta + "\n---\n" + resultadoPush.salidaCompleta + "\n";
-
-      LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
-      g_idle_add(actualizar_ui_idle, ui);
-      append_log_async(msg_final);
-
-finalizar_ui_sync:
       g_idle_add([](gpointer d) -> gboolean {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      },
-                 nullptr);
+      }, nullptr);
 
     } catch (const std::exception &e) {
       std::string err = "💥 Excepción: ";
@@ -379,8 +362,7 @@ finalizar_ui_sync:
       g_idle_add([](gpointer d) -> gboolean {
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      },
-                 nullptr);
+      }, nullptr);
     }
 
     auto limpiarSecret = [](std::string &s) {

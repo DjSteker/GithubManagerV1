@@ -36,39 +36,26 @@ static std::string escaparParaComillasDobles(const std::string &texto) {
   return resultado;
 }
 
-// NUEVO: Validar que la URL no tenga credenciales embebidas
 bool GestorGit::validarUrlRepositorio(const std::string &url) {
   if (url.empty()) return false;
 
-  // Buscar protocolo https:// o git@
   bool isHttps = (url.find("https://") == 0 || url.find("http://") == 0);
   bool isSsh = (url.find("git@") == 0);
 
   if (!isHttps && !isSsh) {
-    // Podría ser una URL relativa u otra forma válida, permitirlo
-    return true;
+    return true; // URL relativa u otro formato válido
   }
 
   if (isHttps) {
-    // Encontrar dónde termina el host (después del primer '/')
     size_t protocolEnd = url.find("://") + 3;
     size_t firstSlashAfterProtocol = url.find('/', protocolEnd);
     size_t checkTo = (firstSlashAfterProtocol == std::string::npos) ? url.length() : firstSlashAfterProtocol;
-
     std::string authorityPart = url.substr(protocolEnd, checkTo - protocolEnd);
 
-    // Si contiene '@', podría tener user:token@host
-    size_t atPos = authorityPart.find('@');
-    if (atPos != std::string::npos) {
-      // Hay credenciales embebidas - potencial riesgo
-      // Para máxima seguridad, rechazamos cualquier URL con @
+    // Rechazar URLs con credenciales embebidas (user:pass@host)
+    if (authorityPart.find('@') != std::string::npos) {
       return false;
     }
-  }
-
-  // URLs SSH tipo git@github.com:user/repo son generalmente seguras
-  if (isSsh) {
-    return true;
   }
 
   return true;
@@ -216,18 +203,12 @@ void GestorGit::eliminarScriptAskpass(const std::string &rutaScript) {
 std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo,
                                           const std::string &token, int *codigoSalida) {
   std::string rutaAskpass;
-  // Forzar salida de git en inglés, independientemente del idioma del sistema
-  // (LANG/LC_ALL del usuario). Esto es necesario porque el código detecta condiciones
-  // como "nothing to commit" buscando cadenas en inglés; con git en español esas
-  // cadenas nunca coincidirían y se reportaría un error falso.
   std::string prefijoEntorno = "LC_ALL=C LANGUAGE=en GIT_TERMINAL_PROMPT=0 ";
 
   if (!token.empty()) {
     rutaAskpass = crearScriptAskpass(token);
     if (!rutaAskpass.empty()) {
       prefijoEntorno += "GIT_ASKPASS=\"" + rutaAskpass + "\" ";
-    } else {
-      // Si no pudo crear askpass, advertir pero continuar sin token
     }
   }
 
@@ -240,14 +221,10 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std:
 
   std::string resultado;
   char buffer[512];
-
   FILE *tuberia = popen(comandoCompleto.c_str(), "r");
   if (!tuberia) {
-    if (codigoSalida) {
-      *codigoSalida = -1;
-    }
-    // Asegurarse de eliminar askpass si fue creado
-    if (!rutaAskpass.empty()) eliminarScriptAskpass(rutaAskpass);
+    if (codigoSalida) {*codigoSalida = -1;}
+    if (!rutaAskpass.empty()) {eliminarScriptAskpass(rutaAskpass);}
     return "No se pudo ejecutar el comando git";
   }
 
@@ -266,8 +243,7 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std:
     }
   }
 
-  // Limpiar el script askpass creado
-  if (!rutaAskpass.empty()) eliminarScriptAskpass(rutaAskpass);
+  if (!rutaAskpass.empty()) {eliminarScriptAskpass(rutaAskpass);}
   return resultado;
 }
 
@@ -359,6 +335,41 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   std::ostringstream salidaCompleta;
   int codigoSalida = 0;
 
+  // =============================================
+  // 1. DETECTAR RAMA ACTUAL Y VALIDAR RAMA ESPECIFICADA
+  // =============================================
+  std::string ramaEfectiva;
+  if (!rama.empty()) {
+    // Si el usuario especificó una rama, validar que existe localmente
+    std::string comandoCheckBranch = "show-ref --verify --quiet refs/heads/" + rama;
+    std::string salidaCheck = ejecutarComandoGit(comandoCheckBranch, directorio, "", &codigoSalida);
+    if (codigoSalida == 0) {
+      ramaEfectiva = rama; // La rama existe, usarla
+    } else {
+      // La rama no existe localmente → Usar la rama actual
+      std::string comandoBranch = "rev-parse --abbrev-ref HEAD";
+      ramaEfectiva = ejecutarComandoGit(comandoBranch, directorio, "", &codigoSalida);
+      ramaEfectiva.erase(std::remove(ramaEfectiva.begin(), ramaEfectiva.end(), '\n'), ramaEfectiva.end());
+      ramaEfectiva.erase(std::remove(ramaEfectiva.begin(), ramaEfectiva.end(), '\r'), ramaEfectiva.end());
+      if (ramaEfectiva.empty()) {
+        ramaEfectiva = "main"; // Fallback por defecto
+      }
+      salidaCompleta << "⚠ Rama '" << rama << "' no existe localmente. Usando rama actual: " << ramaEfectiva << "\n";
+    }
+  } else {
+    // No se especificó rama → Usar la rama actual
+    std::string comandoBranch = "rev-parse --abbrev-ref HEAD";
+    ramaEfectiva = ejecutarComandoGit(comandoBranch, directorio, "", &codigoSalida);
+    ramaEfectiva.erase(std::remove(ramaEfectiva.begin(), ramaEfectiva.end(), '\n'), ramaEfectiva.end());
+    ramaEfectiva.erase(std::remove(ramaEfectiva.begin(), ramaEfectiva.end(), '\r'), ramaEfectiva.end());
+    if (ramaEfectiva.empty()) {
+      ramaEfectiva = "main"; // Fallback por defecto
+    }
+  }
+
+  // =============================================
+  // 2. INICIALIZAR REPOSITORIO NUEVO (si es necesario)
+  // =============================================
   if (esRepoNuevo) {
     std::string salidaInit = ejecutarComandoGit("init", directorio, "", &codigoSalida);
     salidaCompleta << salidaInit;
@@ -366,6 +377,12 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
       resultado.mensaje = "Error inicializando el repositorio local";
       resultado.salidaCompleta = salidaCompleta.str();
       return resultado;
+    }
+
+    // Configurar rama inicial (por defecto "main" o la especificada)
+    if (!ramaEfectiva.empty() && ramaEfectiva != "master") {
+      std::string cmdRename = "branch -M " + ramaEfectiva;
+      ejecutarComandoGit(cmdRename, directorio, "", &codigoSalida);
     }
 
     if (!urlOpcional.empty()) {
@@ -380,44 +397,61 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
     }
   }
 
-  // === MOSTRAR ESTADO ANTES DE HACER CAMBIOS ===
-  std::string salidaStatusBefore = ejecutarComandoGit("status --porcelain", directorio, "", &codigoSalida);
-  salidaCompleta << "📋 Estado ANTES de agregar:\n" << salidaStatusBefore << "\n";
-
-  // === AGREGAR TODOS LOS ARCHIVOS (incluyendo subcarpetas) ===
-  // Usar "git add ." para agregar todo recursivamente desde la carpeta actual
-  std::string salidaAdd = ejecutarComandoGit("add .", directorio, "", &codigoSalida);
-  salidaCompleta << "📦 Agregando archivos...\n" << salidaAdd;
-
-  if (codigoSalida != 0) {
-    // git add . no debe fallar normalmente, pero por seguridad
-    salidaCompleta << "(git add completado)\n";
+  // =============================================
+  // 3. VERIFICAR SI HAY REMOTE CONFIGURADO
+  // =============================================
+  bool tieneRemote = false;
+  {
+    std::string comandoRemoteCheck = "remote -v";
+    std::string salidaRemote = ejecutarComandoGit(comandoRemoteCheck, directorio, "", &codigoSalida);
+    tieneRemote = (salidaRemote.find("origin") != std::string::npos);
   }
 
-  // === VERIFICAR QUÉ FUE AGREGADO ===
-  std::string salidaStatusAfter = ejecutarComandoGit("status --porcelain", directorio, "", &codigoSalida);
+  // =============================================
+  // 4. ESTADO ANTES DE AGREGAR
+  // =============================================
+  std::string salidaStatusBefore = ejecutarComandoGit("status --porcelain --untracked-files=all", directorio, "", &codigoSalida);
+  salidaCompleta << "📋 Estado ANTES de agregar:\n" << salidaStatusBefore << "\n";
+
+  // =============================================
+  // 5. AGREGAR ARCHIVOS
+  // =============================================
+  std::string salidaAdd = ejecutarComandoGit("add .", directorio, "", &codigoSalida);
+  salidaCompleta << "📦 Agregando archivos...\n" << salidaAdd;
+  if (codigoSalida != 0) {
+    salidaCompleta << "(git add falló)\n";
+  }
+
+  // =============================================
+  // 6. ESTADO DESPUÉS DE AGREGAR
+  // =============================================
+  std::string salidaStatusAfter = ejecutarComandoGit("status --porcelain --untracked-files=all", directorio, "", &codigoSalida);
   salidaCompleta << "\n📋 Estado DESPUÉS de agregar:\n" << salidaStatusAfter << "\n";
 
-  // === CREAR COMMIT ===
-  std::string mensajeEfectivo = mensajeCommit.empty() ? "Actualización" : mensajeCommit;
+  // =============================================
+  // 7. CREAR COMMIT
+  // =============================================
+  std::string mensajeEfectivo = mensajeCommit.empty() ? "Actualización automática" : mensajeCommit;
   std::string comandoCommit = "commit -m \"" + escaparParaComillasDobles(mensajeEfectivo) + "\"";
   std::string salidaCommitRaw = ejecutarComandoGit(comandoCommit, directorio, "", &codigoSalida);
   std::string salidaCommit = filtrarLogSensitive(salidaCommitRaw);
   salidaCompleta << "\n💾 Commit:\n" << salidaCommit << "\n";
 
   bool commit_ok = (codigoSalida == 0);
-  bool cambios_detectados = true;
-  
+  bool cambios_detectados = !salidaStatusAfter.empty();
+
+  // =============================================
+  // 8. MANEJO DE CASOS ESPECIALES EN COMMIT
+  // =============================================
   if (!commit_ok) {
     std::string lc = salidaCommit;
-    for (auto &c : lc) c = (char)tolower(c);
-    // Detectar tanto en inglés como en español
-    if (lc.find("nothing to commit") != std::string::npos || 
+    std::transform(lc.begin(), lc.end(), lc.begin(), ::tolower);
+    if (lc.find("nothing to commit") != std::string::npos ||
         lc.find("no changes added to commit") != std::string::npos ||
         lc.find("nada para hacer commit") != std::string::npos ||
         lc.find("no hay cambios para agregar") != std::string::npos) {
       commit_ok = true;
-      cambios_detectados = false;  // No hay cambios para subir
+      cambios_detectados = false;
       salidaCompleta << "\n✓ (Sin cambios nuevos para commitear)\n";
     }
   }
@@ -428,24 +462,50 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
     return resultado;
   }
 
-  // Si no hay cambios, consideramos la operación exitosa (ya está sincronizado)
-  if (!cambios_detectados) {
+  // =============================================
+  // 9. INTENTAR PUSH (INCLUYENDO SI NO HAY CAMBIOS LOCALES)
+  // =============================================
+  if (tieneRemote) {
+    // Verificar que la rama existe localmente antes de hacer push
+    std::string comandoCheckBranchPush = "show-ref --verify --quiet refs/heads/" + ramaEfectiva;
+    std::string salidaCheckPush = ejecutarComandoGit(comandoCheckBranchPush, directorio, "", &codigoSalida);
+    if (codigoSalida != 0) {
+      // La rama no existe localmente → Intentar con la rama actual
+      std::string comandoBranchFallback = "rev-parse --abbrev-ref HEAD";
+      std::string ramaFallback = ejecutarComandoGit(comandoBranchFallback, directorio, "", &codigoSalida);
+      ramaFallback.erase(std::remove(ramaFallback.begin(), ramaFallback.end(), '\n'), ramaFallback.end());
+      ramaFallback.erase(std::remove(ramaFallback.begin(), ramaFallback.end(), '\r'), ramaFallback.end());
+      if (!ramaFallback.empty()) {
+        ramaEfectiva = ramaFallback;
+        salidaCompleta << "⚠ Rama '" << ramaEfectiva << "' no existe. Usando rama actual: " << ramaFallback << "\n";
+      } else {
+        resultado.mensaje = "Error: No se pudo determinar la rama local para hacer push";
+        resultado.salidaCompleta = salidaCompleta.str();
+        return resultado;
+      }
+    }
+
+    std::string comandoPush = "push -u origin " + ramaEfectiva;
+    std::string salidaPushRaw = ejecutarComandoGit(comandoPush, directorio, token, &codigoSalida);
+    std::string salidaPush = filtrarLogSensitive(salidaPushRaw);
+    salidaCompleta << "\n📤 Push a " << ramaEfectiva << ":\n" << salidaPush;
+
+    resultado.salidaCompleta = salidaCompleta.str();
+    resultado.exito = (codigoSalida == 0);
+    resultado.mensaje = resultado.exito
+        ? "Cambios subidos correctamente a la rama " + ramaEfectiva
+        : "Error al subir cambios a la rama " + ramaEfectiva + " (ver log)";
+  } else {
+    // No hay remote configurado
+    if (cambios_detectados) {
+      resultado.mensaje = "Cambios agregados y commiteados, pero no hay remote configurado para subir";
+    } else {
+      resultado.mensaje = "Repositorio sincronizado localmente (sin remote configurado)";
+    }
     resultado.exito = true;
     resultado.salidaCompleta = salidaCompleta.str();
-    resultado.mensaje = "Repositorio sincronizado (sin cambios nuevos)";
-    return resultado;
   }
 
-  // Si hay cambios, proceder a push
-  std::string ramaEfectiva = rama.empty() ? "main" : rama;
-  std::string comandoPush = "push -u origin " + ramaEfectiva;
-  std::string salidaPushRaw = ejecutarComandoGit(comandoPush, directorio, token, &codigoSalida);
-  std::string salidaPush = filtrarLogSensitive(salidaPushRaw);
-  salidaCompleta << "\n📤 Push:\n" << salidaPush;
-
-  resultado.salidaCompleta = salidaCompleta.str();
-  resultado.exito = (codigoSalida == 0);
-  resultado.mensaje = resultado.exito ? "Cambios subidos correctamente" : "Error al subir cambios (revise el log)";
   return resultado;
 }
 

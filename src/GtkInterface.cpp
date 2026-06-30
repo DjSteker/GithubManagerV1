@@ -31,6 +31,11 @@ static GtkWidget *progress_bar = nullptr;
 static GtkTextBuffer *buffer_log = nullptr;
 static GtkWidget *text_view_log = nullptr;  // referencia al GtkTextView (GTK4)
 
+// Botones para habilitar/deshabilitar durante operaciones
+static GtkWidget *btn_subir = nullptr;
+static GtkWidget *btn_descargar = nullptr;
+static GtkWidget *btn_sincronizar = nullptr;
+
 // Estructuras auxiliares para comunicación con el hilo principal
 struct LogData {
   GtkWidget *label;
@@ -94,13 +99,18 @@ static gboolean actualizar_ui_idle(gpointer data) {
   return G_SOURCE_REMOVE;
 }
 
-// Función que ejecuta la tarea git en segundo plano.
-// NOTA: todas las interacciones con GTK deben hacerse desde el hilo principal (usar g_idle_add / append_log_async).
-void run_git_task(GtkWidget *boton, gpointer user_data) {
-  // Bloquear UI mientras se trabaja
-  gtk_widget_set_sensitive(boton, FALSE);
+// Helper para deshabilitar todos los botones durante operación
+static void set_buttons_sensitive(gboolean sensitive) {
+  if (btn_subir) gtk_widget_set_sensitive(btn_subir, sensitive);
+  if (btn_descargar) gtk_widget_set_sensitive(btn_descargar, sensitive);
+  if (btn_sincronizar) gtk_widget_set_sensitive(btn_sincronizar, sensitive);
+}
+
+// Función que ejecuta la tarea git en segundo plano (SUBIR).
+void run_git_upload(GtkWidget *boton, gpointer user_data) {
+  set_buttons_sensitive(FALSE);
   if (progress_bar) gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
-  append_log(buffer_log, "--- Iniciando operación ---\n");
+  append_log(buffer_log, "--- Iniciando operación SUBIR ---\n");
 
   // Capturar datos sensibles en copias locales
   std::string clave = gtk_editable_get_text(GTK_EDITABLE(entry_clave));
@@ -144,7 +154,7 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
         goto finalizar_ui;
       }
 
-      // === 3. Ejecutar operaciones Git ===
+      // === 3. Ejecutar operaciones Git (SUBIR) ===
       bool esRepoNuevo = !fs::exists(fs::path(dir_path) / ".git");
 
       if (esRepoNuevo) {
@@ -189,13 +199,13 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
       g_idle_add(actualizar_ui_idle, ui);
       append_log_async(msg_final);
 
-finalize_ui:
+finalizar_ui:
       g_idle_add([](gpointer d) -> gboolean {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
-        gtk_widget_set_sensitive(GTK_WIDGET(d), TRUE);
+        set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
       },
-                 boton);
+                 nullptr);
 
     } catch (const std::exception &e) {
       std::string err = "💥 Excepción: ";
@@ -206,10 +216,10 @@ finalize_ui:
       append_log_async(err);
 
       g_idle_add([](gpointer d) -> gboolean {
-        gtk_widget_set_sensitive(GTK_WIDGET(d), TRUE);
+        set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
       },
-                 boton);
+                 nullptr);
     }
 
     // 🔒 LIMPIEZA SEGURA CENTRALIZADA DE TODOS LOS SECRETOS EN MEMORIA
@@ -224,9 +234,165 @@ finalize_ui:
     limpiarSecret(clave);
     limpiarSecret(token);
     limpiarSecret(mensaje);
-    // url_repo también puede ser sensible si contiene tokens
     limpiarSecret(url_repo);
-    // dir_path usualmente no es secreto pero por higiene:
+    limpiarSecret(dir_path);
+  });
+
+  t.detach();
+}
+
+// Función que ejecuta la tarea git en segundo plano (DESCARGAR).
+void run_git_download(GtkWidget *boton, gpointer user_data) {
+  set_buttons_sensitive(FALSE);
+  if (progress_bar) gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
+  append_log(buffer_log, "--- Iniciando operación DESCARGAR ---\n");
+
+  std::string dir_path = gtk_editable_get_text(GTK_EDITABLE(entry_directorio));
+  std::string rama = gtk_editable_get_text(GTK_EDITABLE(entry_rama));
+  std::string token = gtk_editable_get_text(GTK_EDITABLE(entry_token));
+
+  std::thread t([=]() mutable {
+    try {
+      if (dir_path.empty()) {
+        append_log_async("❌ ERROR: Directorio local vacío\n");
+        goto finalizar_ui_download;
+      }
+
+      if (!fs::exists(fs::path(dir_path) / ".git")) {
+        append_log_async("❌ ERROR: El directorio no contiene un repositorio Git válido\n");
+        goto finalizar_ui_download;
+      }
+
+      append_log_async("⬇️ Descargando cambios desde repositorio remoto...\n");
+      ResultadoOperacionGit resultado = GestorGit::bajarCambios(dir_path, rama, token);
+
+      std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
+      std::string msg_final = "Resultado: " + estadoStr + "\n";
+      msg_final += "Mensaje: " + resultado.mensaje + "\n\nSalida:\n" + resultado.salidaCompleta + "\n";
+
+      LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
+      g_idle_add(actualizar_ui_idle, ui);
+      append_log_async(msg_final);
+
+finalizar_ui_download:
+      g_idle_add([](gpointer d) -> gboolean {
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
+        set_buttons_sensitive(TRUE);
+        return G_SOURCE_REMOVE;
+      },
+                 nullptr);
+
+    } catch (const std::exception &e) {
+      std::string err = "💥 Excepción: ";
+      err += e.what();
+      err += "\n";
+      append_log_async(err);
+
+      g_idle_add([](gpointer d) -> gboolean {
+        set_buttons_sensitive(TRUE);
+        return G_SOURCE_REMOVE;
+      },
+                 nullptr);
+    }
+
+    auto limpiarSecret = [](std::string &s) {
+      if (!s.empty()) {
+        OPENSSL_cleanse(&s[0], s.size());
+        s.clear();
+        s.shrink_to_fit();
+      }
+    };
+    limpiarSecret(token);
+    limpiarSecret(dir_path);
+  });
+
+  t.detach();
+}
+
+// Función que ejecuta la tarea git en segundo plano (SINCRONIZAR).
+void run_git_sync(GtkWidget *boton, gpointer user_data) {
+  set_buttons_sensitive(FALSE);
+  if (progress_bar) gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
+  append_log(buffer_log, "--- Iniciando operación SINCRONIZAR (Pull + Push) ---\n");
+
+  std::string clave = gtk_editable_get_text(GTK_EDITABLE(entry_clave));
+  std::string dir_path = gtk_editable_get_text(GTK_EDITABLE(entry_directorio));
+  std::string rama = gtk_editable_get_text(GTK_EDITABLE(entry_rama));
+  std::string mensaje = gtk_editable_get_text(GTK_EDITABLE(entry_mensaje));
+  std::string token = gtk_editable_get_text(GTK_EDITABLE(entry_token));
+
+  std::thread t([=]() mutable {
+    try {
+      if (dir_path.empty()) {
+        append_log_async("❌ ERROR: Directorio local vacío\n");
+        goto finalizar_ui_sync;
+      }
+
+      if (!fs::exists(fs::path(dir_path) / ".git")) {
+        append_log_async("❌ ERROR: El directorio no contiene un repositorio Git válido\n");
+        goto finalizar_ui_sync;
+      }
+
+      // Paso 1: Descargar cambios remotos
+      append_log_async("📥 Descargando cambios remotos (pull)...\n");
+      ResultadoOperacionGit resultadoPull = GestorGit::bajarCambios(dir_path, rama, token);
+      if (!resultadoPull.exito) {
+        append_log_async("⚠️ Advertencia en pull: " + resultadoPull.mensaje + "\n");
+      } else {
+        append_log_async("✅ Pull completado\n");
+      }
+
+      // Paso 2: Subir cambios locales
+      append_log_async("📤 Subiendo cambios locales (push)...\n");
+      ResultadoOperacionGit resultadoPush = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
+      if (!resultadoPush.exito) {
+        append_log_async("⚠️ Advertencia en push: " + resultadoPush.mensaje + "\n");
+      } else {
+        append_log_async("✅ Push completado\n");
+      }
+
+      // Resultado final
+      bool ambosExito = resultadoPull.exito && resultadoPush.exito;
+      std::string estadoStr = ambosExito ? "✅ ÉXITO" : "⚠️ PARCIAL";
+      std::string msg_final = "Resultado: " + estadoStr + "\n";
+      msg_final += "Pull: " + (resultadoPull.exito ? "✅" : "❌") + " | Push: " + (resultadoPush.exito ? "✅" : "❌") + "\n";
+      msg_final += "\nDetalles:\n" + resultadoPull.salidaCompleta + "\n---\n" + resultadoPush.salidaCompleta + "\n";
+
+      LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
+      g_idle_add(actualizar_ui_idle, ui);
+      append_log_async(msg_final);
+
+finalizar_ui_sync:
+      g_idle_add([](gpointer d) -> gboolean {
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
+        set_buttons_sensitive(TRUE);
+        return G_SOURCE_REMOVE;
+      },
+                 nullptr);
+
+    } catch (const std::exception &e) {
+      std::string err = "💥 Excepción: ";
+      err += e.what();
+      err += "\n";
+      append_log_async(err);
+
+      g_idle_add([](gpointer d) -> gboolean {
+        set_buttons_sensitive(TRUE);
+        return G_SOURCE_REMOVE;
+      },
+                 nullptr);
+    }
+
+    auto limpiarSecret = [](std::string &s) {
+      if (!s.empty()) {
+        OPENSSL_cleanse(&s[0], s.size());
+        s.clear();
+        s.shrink_to_fit();
+      }
+    };
+    limpiarSecret(clave);
+    limpiarSecret(token);
+    limpiarSecret(mensaje);
     limpiarSecret(dir_path);
   });
 
@@ -286,7 +452,7 @@ void on_select_folder(GtkButton *btn, gpointer data) {
 void build_interface(GtkApplication *app) {
   GtkWidget *window = gtk_application_window_new(app);
   gtk_window_set_title(GTK_WINDOW(window), "Gestor Git - GTK4 + XML Cifrado");
-  gtk_window_set_default_size(GTK_WINDOW(window), 680, 620);
+  gtk_window_set_default_size(GTK_WINDOW(window), 720, 750);
 
   GtkWidget *grid = gtk_grid_new();
   gtk_grid_set_row_spacing(GTK_GRID(grid), 10);
@@ -358,11 +524,27 @@ void build_interface(GtkApplication *app) {
   label_estado = gtk_label_new("Listo");
   gtk_grid_attach(GTK_GRID(grid), label_estado, 0, row++, 2, 1);
 
-  // Botón principal
-  GtkWidget *btn_accion = gtk_button_new_with_label("⬆ SUBIR / SINCRONIZAR");
-  g_signal_connect(btn_accion, "clicked", G_CALLBACK(run_git_task), NULL);
-  gtk_widget_set_size_request(btn_accion, -1, 40);
-  gtk_grid_attach(GTK_GRID(grid), btn_accion, 0, row++, 2, 1);
+  // Botones de acción (tres opciones)
+  GtkWidget *button_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+  gtk_widget_set_halign(button_box, GTK_ALIGN_FILL);
+  gtk_widget_set_hexpand(button_box, TRUE);
+
+  btn_descargar = gtk_button_new_with_label("⬇ DESCARGAR");
+  g_signal_connect(btn_descargar, "clicked", G_CALLBACK(run_git_download), NULL);
+  gtk_widget_set_size_request(btn_descargar, -1, 40);
+  gtk_box_append(GTK_BOX(button_box), btn_descargar);
+
+  btn_sincronizar = gtk_button_new_with_label("🔄 SINCRONIZAR");
+  g_signal_connect(btn_sincronizar, "clicked", G_CALLBACK(run_git_sync), NULL);
+  gtk_widget_set_size_request(btn_sincronizar, -1, 40);
+  gtk_box_append(GTK_BOX(button_box), btn_sincronizar);
+
+  btn_subir = gtk_button_new_with_label("⬆ SUBIR");
+  g_signal_connect(btn_subir, "clicked", G_CALLBACK(run_git_upload), NULL);
+  gtk_widget_set_size_request(btn_subir, -1, 40);
+  gtk_box_append(GTK_BOX(button_box), btn_subir);
+
+  gtk_grid_attach(GTK_GRID(grid), button_box, 0, row++, 2, 1);
 
   // Registro (log)
   GtkWidget *frame_log = gtk_frame_new("Registro");

@@ -216,7 +216,11 @@ void GestorGit::eliminarScriptAskpass(const std::string &rutaScript) {
 std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo,
                                           const std::string &token, int *codigoSalida) {
   std::string rutaAskpass;
-  std::string prefijoEntorno = "GIT_TERMINAL_PROMPT=0 ";
+  // Forzar salida de git en inglés, independientemente del idioma del sistema
+  // (LANG/LC_ALL del usuario). Esto es necesario porque el código detecta condiciones
+  // como "nothing to commit" buscando cadenas en inglés; con git en español esas
+  // cadenas nunca coincidirían y se reportaría un error falso.
+  std::string prefijoEntorno = "LC_ALL=C LANGUAGE=en GIT_TERMINAL_PROMPT=0 ";
 
   if (!token.empty()) {
     rutaAskpass = crearScriptAskpass(token);
@@ -391,7 +395,11 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   if (!commit_ok) {
     std::string lc = salidaCommit;
     for (auto &c : lc) c = (char)tolower(c);
-    if (lc.find("nothing to commit") != std::string::npos || lc.find("no changes added to commit") != std::string::npos) {
+    // Detectar tanto en inglés como en español (aunque ahora forzamos inglés)
+    if (lc.find("nothing to commit") != std::string::npos || 
+        lc.find("no changes added to commit") != std::string::npos ||
+        lc.find("nada para hacer commit") != std::string::npos ||
+        lc.find("no hay cambios para agregar") != std::string::npos) {
       commit_ok = true;
       cambios_detectados = false;  // No hay cambios para subir
       salidaCompleta << "\n✓ (Sin cambios nuevos para commitear)\n";

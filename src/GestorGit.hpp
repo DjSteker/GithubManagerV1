@@ -37,10 +37,13 @@ public:
 
   static ResultadoOperacionGit obtenerEstado(const std::string &directorio);
 
+  // Métodos auxiliares de validación
+  static bool validarUrlRepositorio(const std::string &url);
+  static std::string filtrarLogSensitive(const std::string &log);
+
 private:
   static std::string crearScriptAskpass(const std::string &token);
   static void eliminarScriptAskpass(const std::string &rutaScript);
-
   static std::string ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo,
                                         const std::string &token, int *codigoSalida);
 };

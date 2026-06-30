@@ -13,6 +13,10 @@
 #include <fstream>
 #include <sstream>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <random>
 
 namespace fs = std::filesystem;
 
@@ -29,33 +33,41 @@ static std::string escaparParaComillasDobles(const std::string &texto) {
 }
 
 std::string GestorGit::crearScriptAskpass(const std::string &token) {
-  std::string rutaTemporal =
-    "/tmp/.ghmgr_askpass_" + std::to_string(getpid()) + "_" + std::to_string(std::rand());
+  std::string tmpl = "/tmp/.ghmgr_askpass_XXXXXX";
+  std::vector<char> buf(tmpl.begin(), tmpl.end());
+  buf.push_back('\0');
 
-  std::ofstream archivoScript(rutaTemporal, std::ios::out | std::ios::trunc);
-  if (!archivoScript.is_open()) {
+  int fd = mkstemp(buf.data());
+  if (fd == -1) {
     return "";
   }
 
-  // El script simplemente devuelve el token cuando git le pide la
-  // contraseña; el nombre de usuario es irrelevante para tokens de
-  // GitHub (puede ser cualquier valor no vacío).
-  archivoScript << "#!/bin/sh\n";
-  archivoScript << "echo \"" << escaparParaComillasDobles(token) << "\"\n";
-  archivoScript.close();
+  // Construir el contenido con cuidado (evitar inyección):
+  std::string contenido = "#!/bin/sh\n";
+  // Usar printf para evitar interpretaciones de escape
+  contenido += "printf '%s' \"" + escaparParaComillasDobles(token) + "\"\n";
 
-  std::error_code codigoError;
-  fs::permissions(rutaTemporal,
-                  fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec,
-                  fs::perm_options::replace, codigoError);
+  ssize_t written = write(fd, contenido.data(), contenido.size());
+  if (written != (ssize_t)contenido.size()) {
+    close(fd);
+    unlink(buf.data());
+    return "";
+  }
 
-  return rutaTemporal;
+  fsync(fd);
+  // Asegurar permisos del propietario sólo (700)
+  fchmod(fd, S_IRWXU);
+  close(fd);
+
+  return std::string(buf.data());
 }
 
 void GestorGit::eliminarScriptAskpass(const std::string &rutaScript) {
   if (!rutaScript.empty() && fs::exists(rutaScript)) {
-    std::error_code codigoError;
-    fs::remove(rutaScript, codigoError);
+    std::error_code ec;
+    fs::remove(rutaScript, ec);
+    // Asegurar eliminación por si unlink directo es necesario
+    unlink(rutaScript.c_str());
   }
 }
 
@@ -94,9 +106,15 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std:
     resultado += buffer;
   }
 
-  int estado = pclose(tuberia);
+  int status = pclose(tuberia);
   if (codigoSalida) {
-    *codigoSalida = WEXITSTATUS(estado);
+    if (status == -1) {
+      *codigoSalida = -1;
+    } else if (WIFEXITED(status)) {
+      *codigoSalida = WEXITSTATUS(status);
+    } else {
+      *codigoSalida = -1;
+    }
   }
 
   eliminarScriptAskpass(rutaAskpass);
@@ -111,6 +129,18 @@ ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlReposit
   if (urlRepositorio.empty() || directorioDestino.empty()) {
     resultado.mensaje = "URL del repositorio o directorio destino vacíos";
     return resultado;
+  }
+
+  // Si el destino existe y no está vacío, git clone normalmente falla.
+  // Mejor avisar y fallar claramente para que la app pueda decidir (o usar init+remote).
+  if (fs::exists(directorioDestino)) {
+    bool vacio = true;
+    for (auto &p : fs::directory_iterator(directorioDestino)) { vacio = false; break; }
+    if (!vacio) {
+      resultado.mensaje = "El directorio destino existe y no está vacío; no se puede clonar allí. Usa una carpeta vacía o inicializa el repo local.";
+      resultado.exito = false;
+      return resultado;
+    }
   }
 
   std::string comando = "clone \"" + escaparParaComillasDobles(urlRepositorio) + "\" \"" + escaparParaComillasDobles(directorioDestino) + "\"";
@@ -152,7 +182,8 @@ ResultadoOperacionGit GestorGit::bajarCambios(const std::string &directorio,
 }
 
 ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, const std::string &rama,
-                                              const std::string &mensajeCommit, const std::string &token) {
+                                              const std::string &mensajeCommit, const std::string &token,
+                                              const std::string &urlOpcional) {
   ResultadoOperacionGit resultado{ false, "", "" };
 
   if (directorio.empty()) {
@@ -172,6 +203,17 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
       resultado.salidaCompleta = salidaCompleta.str();
       return resultado;
     }
+
+    if (!urlOpcional.empty()) {
+      std::string cmdRemote = "remote add origin \"" + escaparParaComillasDobles(urlOpcional) + "\"";
+      std::string salidaRemote = ejecutarComandoGit(cmdRemote, directorio, "", &codigoSalida);
+      salidaCompleta << salidaRemote;
+      if (codigoSalida != 0) {
+        resultado.mensaje = "Error añadiendo remote origin";
+        resultado.salidaCompleta = salidaCompleta.str();
+        return resultado;
+      }
+    }
   }
 
   std::string salidaAdd = ejecutarComandoGit("add -A", directorio, "", &codigoSalida);
@@ -181,6 +223,24 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   std::string comandoCommit = "commit -m \"" + escaparParaComillasDobles(mensajeEfectivo) + "\"";
   std::string salidaCommit = ejecutarComandoGit(comandoCommit, directorio, "", &codigoSalida);
   salidaCompleta << salidaCommit;
+
+  // Si commit devolvió fallo, comprobar si fue porque no había cambios
+  bool commit_ok = (codigoSalida == 0);
+  if (!commit_ok) {
+    // detectar mensajes comunes "nothing to commit" o "no changes added to commit"
+    std::string lc = salidaCommit;
+    for (auto &c : lc) c = (char)tolower(c);
+    if (lc.find("nothing to commit") != std::string::npos || lc.find("no changes added to commit") != std::string::npos) {
+      // no hay cambios: no es fatal, continuar con push (quizá no haya nada que subir)
+      commit_ok = true;
+    }
+  }
+
+  if (!commit_ok) {
+    resultado.mensaje = "Error al crear el commit";
+    resultado.salidaCompleta = salidaCompleta.str();
+    return resultado;
+  }
 
   std::string ramaEfectiva = rama.empty() ? "main" : rama;
   std::string comandoPush = "push -u origin " + ramaEfectiva;

@@ -1,0 +1,70 @@
+# makelist.txt - Makefile compatible para compilar GithubManagerV1
+# Uso: make -f makelist.txt
+# Para usar directamente como Makefile: mv makelist.txt Makefile
+
+SHELL := /bin/bash
+CXX ?= g++
+BUILD_DIR := build
+SRC_DIR := src
+SRCS := $(wildcard $(SRC_DIR)/*.cpp)
+OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
+TARGET := GithubManager
+
+# Intentar obtener flags con pkg-config
+PKG_CFLAGS := $(shell pkg-config --cflags gtk4 tinyxml2 openssl 2>/dev/null || true)
+PKG_LIBS   := $(shell pkg-config --libs gtk4 tinyxml2 openssl 2>/dev/null || true)
+
+CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra $(PKG_CFLAGS)
+LDFLAGS  ?= $(PKG_LIBS)
+
+.PHONY: all build clean check-pkg-config check-deps install-deps run
+
+all: check-pkg-config build
+
+check-pkg-config:
+	@which pkg-config >/dev/null 2>&1 || { echo "pkg-config no encontrado. Instala pkg-config y vuelve a intentar."; exit 1; }
+	@if [ -z "$(PKG_CFLAGS)" ] || [ -z "$(PKG_LIBS)" ]; then \
+	  echo "pkg-config no encontró gtk4/tinyxml2/openssl"; \
+	  echo "Ejecuta 'make -f makelist.txt check-deps' o usa scripts/install-deps.sh para instalar dependencias."; \
+	  exit 1; \
+	fi
+
+# Build target
+build: $(TARGET)
+
+$(TARGET): $(OBJS) | $(BUILD_DIR)
+	@echo "Linking $@"
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS) -pthread
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	@echo "Compiling $<"
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
+
+clean:
+	@echo "Cleaning build artefacts"
+	@rm -rf $(BUILD_DIR) $(TARGET)
+
+# Comprueba si hay paquetes mínimos (simple check de comandos/headers)
+check-deps:
+	@echo "Verificando dependencias (pkg-config)..."
+	@pkg-config --exists gtk4 tinyxml2 openssl && echo "gtk4, tinyxml2 y openssl detectados por pkg-config." || echo "Faltan paquetes detectados por pkg-config."
+
+# Lanza el script de instalación de dependencias (necesita sudo)
+install-deps:
+	@echo "Ejecutando scripts/install-deps.sh (necesitarás privilegios sudo en varias distros)..."
+	@bash scripts/install-deps.sh
+
+run: $(TARGET)
+	@./$(TARGET)
+
+# Variables útiles para debug
+show:
+	@echo "CXX=$(CXX)"
+	@echo "CXXFLAGS=$(CXXFLAGS)"
+	@echo "LDFLAGS=$(LDFLAGS)"
+	@echo "SRCS=$(SRCS)"
+	@echo "OBJS=$(OBJS)"

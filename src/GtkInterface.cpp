@@ -1,7 +1,7 @@
 /*
  * GtkInterface.cpp
  *  Created on: 30 jun 2026
- *  Author: usuario001 - modificado para cifrado + XML
+ *  Author: DjSteker - modificado para cifrado + XML
  */
 
 #include "GtkInterface.hpp"

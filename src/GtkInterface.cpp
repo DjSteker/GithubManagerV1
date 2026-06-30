@@ -1,7 +1,7 @@
 /*
  * GtkInterface.cpp
  *  Created on: 30 jun 2026
- *  Author: DjSteker - modificado para cifrado + XML
+ *  Author: DjSteker 
  */
 
 #include "GtkInterface.hpp"
@@ -97,12 +97,12 @@ static gboolean actualizar_ui_idle(gpointer data) {
 // Función que ejecuta la tarea git en segundo plano.
 // NOTA: todas las interacciones con GTK deben hacerse desde el hilo principal (usar g_idle_add / append_log_async).
 void run_git_task(GtkWidget *boton, gpointer user_data) {
+  // Bloquear UI mientras se trabaja
   gtk_widget_set_sensitive(boton, FALSE);
   if (progress_bar) gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
   append_log(buffer_log, "--- Iniciando operación ---\n");
 
-  // Tomar copias locales (modificables) de los valores de los widgets.
-  // Usamos copias locales para poder limpiarlas (OPENSSL_cleanse) antes de que el hilo termine.
+  // Capturar datos sensibles en copias locales
   std::string clave = gtk_editable_get_text(GTK_EDITABLE(entry_clave));
   std::string dir_path = gtk_editable_get_text(GTK_EDITABLE(entry_directorio));
   std::string url_repo = gtk_editable_get_text(GTK_EDITABLE(entry_url));
@@ -111,90 +111,85 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
   std::string token = gtk_editable_get_text(GTK_EDITABLE(entry_token));
   bool guardar = gtk_check_button_get_active(GTK_CHECK_BUTTON(check_guardar));
 
-  // Lanzar hilo de trabajo
+  // Hilo de trabajo seguro
   std::thread t([=]() mutable {
     ResultadoOperacionGit resultado;
+
     try {
-      // Guardar configuración cifrada (si corresponde)
+      // === 1. Guardar configuración cifrada (si aplica) ===
       if (guardar && !clave.empty() && !dir_path.empty()) {
         ConfigRepo cfg;
         cfg.url = url_repo;
         cfg.directorio = dir_path;
         cfg.rama = rama.empty() ? "main" : rama;
 
-        // Encriptar el token con la clave (Cifrado::encriptar devuelve std::string)
-        std::string token_cifrado;
         try {
-          token_cifrado = Cifrado::encriptar(token, clave);
+          cfg.tokenEncriptado = Cifrado::encriptar(token, clave);
+          if (GestorConfig::guardar(cfg)) {
+            append_log_async("✓ Configuración guardada en XML cifrado\n");
+          } else {
+            append_log_async("⚠ No se pudo guardar configuración\n");
+          }
         } catch (const std::exception &e) {
           append_log_async(std::string("Error cifrando token: ") + e.what() + "\n");
         }
-
-        cfg.tokenEncriptado = token_cifrado;
-        if (GestorConfig::guardar(cfg)) {
-          append_log_async("✓ Configuración guardada en XML cifrado\n");
-        } else {
-          append_log_async("⚠ No se pudo guardar la configuración en XML\n");
-        }
-
-        // limpiar token_cifrado en memoria (no necesario si local, pero por higiene)
-        if (!token_cifrado.empty()) {
-          OPENSSL_cleanse(&token_cifrado[0], token_cifrado.size());
-          token_cifrado.clear();
-        }
       }
 
+      // === 2. Validar URL del repositorio ===
+      if (!url_repo.empty() && !GestorGit::validarUrlRepositorio(url_repo)) {
+        std::string err = "❌ ERROR: URL inválida no debe contener credenciales embebidas\n";
+        LogData *ui = new LogData{ label_estado, g_strdup(err.c_str()) };
+        g_idle_add(actualizar_ui_idle, ui);
+        append_log_async(err);
+        goto finalizar_ui;
+      }
+
+      // === 3. Ejecutar operaciones Git ===
       bool esRepoNuevo = !fs::exists(fs::path(dir_path) / ".git");
 
       if (esRepoNuevo) {
-        append_log_async("Repositorio nuevo detectado...\n");
+        append_log_async("📦 Repositorio nuevo detectado...\n");
         if (!url_repo.empty()) {
-          // Si el directorio existe y no está vacío, evitar git clone directo
           if (fs::exists(dir_path)) {
             bool vacio = (fs::directory_iterator(dir_path) == fs::directory_iterator());
             if (!vacio) {
-              append_log_async("Directorio existente y no vacío: inicializando repo local y añadiendo remote origin...\n");
+              append_log_async("⚙️ Directorio existente: inicializando repo local...\n");
               resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, url_repo);
             } else {
-              append_log_async("Clonando repositorio...\n");
+              append_log_async("➡️ Clonando repositorio...\n");
               resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
               if (resultado.exito) {
-                append_log_async("Clonación OK. Subiendo (si procede)...\n");
+                append_log_async("✅ Clonación exitosa.\n");
                 resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
-
-                if (!token.empty()) {
-                  OPENSSL_cleanse(&token[0], token.size());
-                  token.clear();
-                  token.shrink_to_fit();  // Reducir capacidad de reserva de memoria
-                }
               }
             }
           } else {
-            append_log_async("Clonando repositorio en directorio nuevo...\n");
+            append_log_async("➡️ Clonando en directorio nuevo...\n");
             resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
             if (resultado.exito) {
-              append_log_async("Clonación OK. Subiendo (si procede)...\n");
+              append_log_async("✅ Clonación exitosa.\n");
               resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
             }
           }
         } else {
-          append_log_async("Inicializando repo local (sin remote)...\n");
+          append_log_async("⚙️ Inicializando repo local (sin remote)...\n");
           resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
         }
       } else {
-        append_log_async("Repo existente. Subiendo cambios...\n");
+        append_log_async("🔄 Repositorio existente: subiendo cambios...\n");
         resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
       }
 
-      std::string msg_final = std::string("Resultado: ") + (resultado.exito ? "ÉXITO" : "FALLIDO") + "\n";
+      // === 4. Mostrar resultado al usuario ===
+      std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
+      std::string msg_final = "Resultado: " + estadoStr + "\n";
       msg_final += "Mensaje: " + resultado.mensaje + "\n\nSalida:\n" + resultado.salidaCompleta + "\n";
 
-      // Actualiza label de estado y log en hilo principal
       LogData *ui = new LogData{ label_estado, g_strdup(msg_final.c_str()) };
       g_idle_add(actualizar_ui_idle, ui);
       append_log_async(msg_final);
 
-      // Restaurar UI: progreso y botón sensible
+finalize_ui:
       g_idle_add([](gpointer d) -> gboolean {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         gtk_widget_set_sensitive(GTK_WIDGET(d), TRUE);
@@ -203,12 +198,13 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
                  boton);
 
     } catch (const std::exception &e) {
-      std::string err = "Excepción: ";
+      std::string err = "💥 Excepción: ";
       err += e.what();
       err += "\n";
       LogData *ui = new LogData{ label_estado, g_strdup(err.c_str()) };
       g_idle_add(actualizar_ui_idle, ui);
       append_log_async(err);
+
       g_idle_add([](gpointer d) -> gboolean {
         gtk_widget_set_sensitive(GTK_WIDGET(d), TRUE);
         return G_SOURCE_REMOVE;
@@ -216,28 +212,22 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
                  boton);
     }
 
-    // LIMPIEZA DE DATOS SENSIBLES EN MEMORIA (antes de terminar el hilo)
-    if (!token.empty()) {
-      OPENSSL_cleanse(&token[0], token.size());
-      token.clear();
-    }
-    if (!clave.empty()) {
-      OPENSSL_cleanse(&clave[0], clave.size());
-      clave.clear();
-    }
-    if (!mensaje.empty()) {
-      OPENSSL_cleanse(&mensaje[0], mensaje.size());
-      mensaje.clear();
-    }
-    if (!url_repo.empty()) {
-      // url_repo no es tan sensible pero se limpia por higiene
-      OPENSSL_cleanse(&url_repo[0], url_repo.size());
-      url_repo.clear();
-    }
-    if (!dir_path.empty()) {
-      OPENSSL_cleanse(&dir_path[0], dir_path.size());
-      dir_path.clear();
-    }
+    // 🔒 LIMPIEZA SEGURA CENTRALIZADA DE TODOS LOS SECRETOS EN MEMORIA
+    auto limpiarSecret = [](std::string &s) {
+      if (!s.empty()) {
+        OPENSSL_cleanse(&s[0], s.size());
+        s.clear();
+        s.shrink_to_fit();
+      }
+    };
+
+    limpiarSecret(clave);
+    limpiarSecret(token);
+    limpiarSecret(mensaje);
+    // url_repo también puede ser sensible si contiene tokens
+    limpiarSecret(url_repo);
+    // dir_path usualmente no es secreto pero por higiene:
+    limpiarSecret(dir_path);
   });
 
   t.detach();

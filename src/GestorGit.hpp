@@ -8,7 +8,6 @@
 #ifndef GESTORGIT_HPP_
 #define GESTORGIT_HPP_
 
-
 #include <string>
 
 struct ResultadoOperacionGit {
@@ -23,15 +22,27 @@ struct ResultadoOperacionGit {
 // comandos, para que no quede expuesto en la lista de procesos del sistema.
 class GestorGit {
 public:
-  static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio, const std::string &directorioDestino, const std::string &token);
-  static ResultadoOperacionGit bajarCambios(const std::string &directorio, const std::string &rama, const std::string &token);
-  static ResultadoOperacionGit subirCambios(const std::string &directorio, const std::string &rama, const std::string &mensajeCommit, const std::string &token);
+  static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio,
+                                                 const std::string &directorioDestino,
+                                                 const std::string &token);
+
+  static ResultadoOperacionGit bajarCambios(const std::string &directorio,
+                                            const std::string &rama,
+                                            const std::string &token);
+
+  // Nota: urlOpcional se usa cuando se inicializa un repo vacío y queremos agregar remote origin
+  static ResultadoOperacionGit subirCambios(const std::string &directorio, const std::string &rama,
+                                            const std::string &mensajeCommit, const std::string &token,
+                                            const std::string &urlOpcional = "");
+
   static ResultadoOperacionGit obtenerEstado(const std::string &directorio);
 
 private:
   static std::string crearScriptAskpass(const std::string &token);
   static void eliminarScriptAskpass(const std::string &rutaScript);
-  static std::string ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo, const std::string &token, int *codigoSalida);
+
+  static std::string ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo,
+                                        const std::string &token, int *codigoSalida);
 };
 
 #endif /* GESTORGIT_HPP_ */

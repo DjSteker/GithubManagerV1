@@ -2,7 +2,7 @@
  * SecureBuffer.hpp
  *
  *  Created on: 30 jun 2026
- *      Author: usuario001
+ *      Author: DjSteker
  */
 
 #ifndef SECUREBUFFER_HPP_

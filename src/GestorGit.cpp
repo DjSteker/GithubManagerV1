@@ -380,14 +380,30 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
     }
   }
 
-  std::string salidaAdd = ejecutarComandoGit("add -A", directorio, "", &codigoSalida);
-  salidaCompleta << salidaAdd;
+  // === MOSTRAR ESTADO ANTES DE HACER CAMBIOS ===
+  std::string salidaStatusBefore = ejecutarComandoGit("status --porcelain", directorio, "", &codigoSalida);
+  salidaCompleta << "📋 Estado ANTES de agregar:\n" << salidaStatusBefore << "\n";
 
+  // === AGREGAR TODOS LOS ARCHIVOS (incluyendo subcarpetas) ===
+  // Usar "git add ." para agregar todo recursivamente desde la carpeta actual
+  std::string salidaAdd = ejecutarComandoGit("add .", directorio, "", &codigoSalida);
+  salidaCompleta << "📦 Agregando archivos...\n" << salidaAdd;
+
+  if (codigoSalida != 0) {
+    // git add . no debe fallar normalmente, pero por seguridad
+    salidaCompleta << "(git add completado)\n";
+  }
+
+  // === VERIFICAR QUÉ FUE AGREGADO ===
+  std::string salidaStatusAfter = ejecutarComandoGit("status --porcelain", directorio, "", &codigoSalida);
+  salidaCompleta << "\n📋 Estado DESPUÉS de agregar:\n" << salidaStatusAfter << "\n";
+
+  // === CREAR COMMIT ===
   std::string mensajeEfectivo = mensajeCommit.empty() ? "Actualización" : mensajeCommit;
   std::string comandoCommit = "commit -m \"" + escaparParaComillasDobles(mensajeEfectivo) + "\"";
   std::string salidaCommitRaw = ejecutarComandoGit(comandoCommit, directorio, "", &codigoSalida);
   std::string salidaCommit = filtrarLogSensitive(salidaCommitRaw);
-  salidaCompleta << salidaCommit;
+  salidaCompleta << "\n💾 Commit:\n" << salidaCommit << "\n";
 
   bool commit_ok = (codigoSalida == 0);
   bool cambios_detectados = true;
@@ -395,7 +411,7 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   if (!commit_ok) {
     std::string lc = salidaCommit;
     for (auto &c : lc) c = (char)tolower(c);
-    // Detectar tanto en inglés como en español (aunque ahora forzamos inglés)
+    // Detectar tanto en inglés como en español
     if (lc.find("nothing to commit") != std::string::npos || 
         lc.find("no changes added to commit") != std::string::npos ||
         lc.find("nada para hacer commit") != std::string::npos ||
@@ -425,7 +441,7 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   std::string comandoPush = "push -u origin " + ramaEfectiva;
   std::string salidaPushRaw = ejecutarComandoGit(comandoPush, directorio, token, &codigoSalida);
   std::string salidaPush = filtrarLogSensitive(salidaPushRaw);
-  salidaCompleta << salidaPush;
+  salidaCompleta << "\n📤 Push:\n" << salidaPush;
 
   resultado.salidaCompleta = salidaCompleta.str();
   resultado.exito = (codigoSalida == 0);

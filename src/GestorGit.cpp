@@ -386,12 +386,15 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   salidaCompleta << salidaCommit;
 
   bool commit_ok = (codigoSalida == 0);
+  bool cambios_detectados = true;
+  
   if (!commit_ok) {
     std::string lc = salidaCommit;
     for (auto &c : lc) c = (char)tolower(c);
     if (lc.find("nothing to commit") != std::string::npos || lc.find("no changes added to commit") != std::string::npos) {
       commit_ok = true;
-      salidaCompleta << "\n(Sin cambios nuevos para commitear)\n";
+      cambios_detectados = false;  // No hay cambios para subir
+      salidaCompleta << "\n✓ (Sin cambios nuevos para commitear)\n";
     }
   }
 
@@ -401,6 +404,15 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
     return resultado;
   }
 
+  // Si no hay cambios, consideramos la operación exitosa (ya está sincronizado)
+  if (!cambios_detectados) {
+    resultado.exito = true;
+    resultado.salidaCompleta = salidaCompleta.str();
+    resultado.mensaje = "Repositorio sincronizado (sin cambios nuevos)";
+    return resultado;
+  }
+
+  // Si hay cambios, proceder a push
   std::string ramaEfectiva = rama.empty() ? "main" : rama;
   std::string comandoPush = "push -u origin " + ramaEfectiva;
   std::string salidaPushRaw = ejecutarComandoGit(comandoPush, directorio, token, &codigoSalida);

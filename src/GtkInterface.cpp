@@ -1,7 +1,7 @@
 /*
  * GtkInterface.cpp
  *  Created on: 30 jun 2026
- *  Author: DjSteker 
+ *  Author: DjSteker
  */
 
 #include "GtkInterface.hpp"
@@ -15,6 +15,8 @@
 #include <filesystem>
 #include <cstring>
 #include <openssl/crypto.h>  // OPENSSL_cleanse
+
+#include <functional>
 
 namespace fs = std::filesystem;
 
@@ -43,13 +45,29 @@ struct LogData {
 };
 
 // append_log: uso directo desde hilo principal para insertar texto en el buffer
+//static void append_log(GtkTextBuffer *buffer, const char *mensaje) {
+//  if (!buffer || !mensaje) return;
+//  GtkTextIter iter;
+//  gtk_text_buffer_get_end_iter(buffer, &iter);
+//  gtk_text_buffer_insert(buffer, &iter, mensaje, -1);
+//
+//  // Auto-scroll si tenemos el text_view
+//  if (text_view_log) {
+//    gtk_text_buffer_get_end_iter(buffer, &iter);
+//    GtkTextMark *mark = gtk_text_buffer_create_mark(buffer, NULL, &iter, FALSE);
+//    gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(text_view_log), mark, 0.0, FALSE, 0, 0);
+//    gtk_text_buffer_delete_mark(buffer, mark);
+//  }
+//}
+
 static void append_log(GtkTextBuffer *buffer, const char *mensaje) {
+  // Si el buffer no existe, salimos inmediatamente de forma segura
   if (!buffer || !mensaje) return;
+
   GtkTextIter iter;
   gtk_text_buffer_get_end_iter(buffer, &iter);
   gtk_text_buffer_insert(buffer, &iter, mensaje, -1);
 
-  // Auto-scroll si tenemos el text_view
   if (text_view_log) {
     gtk_text_buffer_get_end_iter(buffer, &iter);
     GtkTextMark *mark = gtk_text_buffer_create_mark(buffer, NULL, &iter, FALSE);
@@ -63,24 +81,48 @@ struct IdleLogData {
   GtkTextBuffer *buf;
   char *msg;
 };
+
+//static gboolean idle_append_log(gpointer data) {
+//  auto *d = static_cast<IdleLogData *>(data);
+//  if (d && d->buf && d->msg) {
+//    GtkTextIter iter;
+//    gtk_text_buffer_get_end_iter(d->buf, &iter);
+//    gtk_text_buffer_insert(d->buf, &iter, d->msg, -1);
+//
+//    if (text_view_log) {
+//      gtk_text_buffer_get_end_iter(d->buf, &iter);
+//      GtkTextMark *mark = gtk_text_buffer_create_mark(d->buf, NULL, &iter, FALSE);
+//      gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(text_view_log), mark, 0.0, FALSE, 0, 0);
+//      gtk_text_buffer_delete_mark(d->buf, mark);
+//    }
+//    g_free(d->msg);
+//  }
+//  delete d;
+//  return G_SOURCE_REMOVE;
+//}
+
 static gboolean idle_append_log(gpointer data) {
   auto *d = static_cast<IdleLogData *>(data);
+  // Añadimos la comprobación de d->buf aquí también por seguridad
   if (d && d->buf && d->msg) {
     GtkTextIter iter;
     gtk_text_buffer_get_end_iter(d->buf, &iter);
     gtk_text_buffer_insert(d->buf, &iter, d->msg, -1);
-
     if (text_view_log) {
       gtk_text_buffer_get_end_iter(d->buf, &iter);
       GtkTextMark *mark = gtk_text_buffer_create_mark(d->buf, NULL, &iter, FALSE);
       gtk_text_view_scroll_to_mark(GTK_TEXT_VIEW(text_view_log), mark, 0.0, FALSE, 0, 0);
       gtk_text_buffer_delete_mark(d->buf, mark);
     }
-    g_free(d->msg);
   }
-  delete d;
+  // Liberamos la memoria de todas formas para evitar leaks
+  if (d) {
+    if (d->msg) g_free(d->msg);
+    delete d;
+  }
   return G_SOURCE_REMOVE;
 }
+
 static void append_log_async(const std::string &mensaje) {
   IdleLogData *d = new IdleLogData();
   d->buf = buffer_log;
@@ -91,11 +133,15 @@ static void append_log_async(const std::string &mensaje) {
 // Actualiza label de estado desde idle
 static gboolean actualizar_ui_idle(gpointer data) {
   auto params = static_cast<LogData *>(data);
-  if (params->label && params->texto) {
-    gtk_label_set_text(GTK_LABEL(params->label), params->texto);
+
+  // === QUITADO ===
+  // Ya no llamamos a gtk_label_set_text para que no se muestre en la ventana.
+
+  // Solo limpiamos la memoria para que el programa no se rompa
+  if (params) {
+    if (params->texto) g_free(params->texto);
+    delete params;
   }
-  g_free(params->texto);
-  delete params;
   return G_SOURCE_REMOVE;
 }
 
@@ -202,7 +248,8 @@ void run_git_upload(GtkWidget *boton, gpointer user_data) {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      }, nullptr);
+      },
+                 nullptr);
 
     } catch (const std::exception &e) {
       std::string err = "💥 Excepción: ";
@@ -215,7 +262,8 @@ void run_git_upload(GtkWidget *boton, gpointer user_data) {
       g_idle_add([](gpointer d) -> gboolean {
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      }, nullptr);
+      },
+                 nullptr);
     }
 
     // 🔒 LIMPIEZA SEGURA CENTRALIZADA DE TODOS LOS SECRETOS EN MEMORIA
@@ -270,7 +318,8 @@ void run_git_download(GtkWidget *boton, gpointer user_data) {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      }, nullptr);
+      },
+                 nullptr);
 
     } catch (const std::exception &e) {
       std::string err = "💥 Excepción: ";
@@ -281,7 +330,8 @@ void run_git_download(GtkWidget *boton, gpointer user_data) {
       g_idle_add([](gpointer d) -> gboolean {
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      }, nullptr);
+      },
+                 nullptr);
     }
 
     auto limpiarSecret = [](std::string &s) {
@@ -351,7 +401,8 @@ void run_git_sync(GtkWidget *boton, gpointer user_data) {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      }, nullptr);
+      },
+                 nullptr);
 
     } catch (const std::exception &e) {
       std::string err = "💥 Excepción: ";
@@ -362,7 +413,8 @@ void run_git_sync(GtkWidget *boton, gpointer user_data) {
       g_idle_add([](gpointer d) -> gboolean {
         set_buttons_sensitive(TRUE);
         return G_SOURCE_REMOVE;
-      }, nullptr);
+      },
+                 nullptr);
     }
 
     auto limpiarSecret = [](std::string &s) {
@@ -381,51 +433,121 @@ void run_git_sync(GtkWidget *boton, gpointer user_data) {
   t.detach();
 }
 
-// Selector de carpeta (usa GtkFileDialog en GTK4). Mantenerlo en hilo principal (es UI).
+// Selector de carpeta
+struct ConfigCargadaData {
+  std::string url;
+  std::string rama;
+  std::string token;
+  bool exito_cargar = false;
+};
+
+// Selector de carpeta (usa GtkFileDialog en GTK4).
+// Selector de carpeta (usa GtkFileDialog en GTK4) sin bloqueos, protegido y con borrado seguro
 void on_select_folder(GtkButton *btn, gpointer data) {
   GtkWindow *win = GTK_WINDOW(gtk_widget_get_root(GTK_WIDGET(btn)));
   GtkFileDialog *dialog = gtk_file_dialog_new();
+
   gtk_file_dialog_select_folder(
     dialog, win, NULL,
     [](GObject *src, GAsyncResult *res, gpointer udata) {
       GFile *file = gtk_file_dialog_select_folder_finish(GTK_FILE_DIALOG(src), res, NULL);
-      if (file) {
-        gchar *path = g_file_get_path(file);
-        gtk_editable_set_text(GTK_EDITABLE(entry_directorio), path);
+      if (!file) return;
 
-        // Intentar cargar configuración existente para esa carpeta
+      gchar *path_raw = g_file_get_path(file);
+      std::string path_str(path_raw);
+      g_free(path_raw);
+      g_object_unref(file);
+
+      // Mostrar la ruta inmediatamente en la interfaz
+      gtk_editable_set_text(GTK_EDITABLE(entry_directorio), path_str.c_str());
+
+      // Capturar la clave actual de la UI de forma segura
+      std::string clave_local = gtk_editable_get_text(GTK_EDITABLE(entry_clave));
+
+      // Hilo secundario para evitar congelar la interfaz
+      std::thread t_cargar([path_str, clave_local]() mutable {
+        // Definimos las variables fuera del try para poder limpiarlas en cualquier punto
         ConfigRepo cfg;
-        if (GestorConfig::cargar(path, cfg)) {
-          gtk_editable_set_text(GTK_EDITABLE(entry_url), cfg.url.c_str());
-          gtk_editable_set_text(GTK_EDITABLE(entry_rama), cfg.rama.c_str());
+        std::string token_plain;
+        std::string url_final;
+        std::string rama_final;
 
-          // Si hay token en el XML y hay clave en la UI, intentar desencriptar
-          std::string clave_local = gtk_editable_get_text(GTK_EDITABLE(entry_clave));
-          if (!cfg.tokenEncriptado.empty() && !clave_local.empty()) {
-            std::string token_plain;
-            try {
+        // Lambda interna para borrar de forma segura cualquier string de la memoria RAM
+        auto borrar_secreto = [](std::string &s) {
+          if (!s.empty()) {
+            OPENSSL_cleanse(&s[0], s.size());
+            s.clear();
+            s.shrink_to_fit();  // Devuelve la memoria al sistema operativo ya vacía
+          }
+        };
+
+        try {
+          // Intentar cargar el archivo XML
+          if (GestorConfig::cargar(path_str, cfg)) {
+            url_final = cfg.url;
+            rama_final = cfg.rama;
+
+            // Intentar desencriptar el token
+            if (!cfg.tokenEncriptado.empty() && !clave_local.empty()) {
               token_plain = Cifrado::desencriptar(cfg.tokenEncriptado, clave_local);
-            } catch (...) {
-              token_plain.clear();
             }
-            if (!token_plain.empty()) {
-              gtk_editable_set_text(GTK_EDITABLE(entry_token), token_plain.c_str());
-              append_log(buffer_log, "✓ Configuración cargada desde XML\n");
-            }
-            // limpiar copia local de la clave y del token_plain
-            if (!token_plain.empty()) {
-              OPENSSL_cleanse(&token_plain[0], token_plain.size());
-              token_plain.clear();
-            }
+
+            // Si todo fue bien, enviamos los datos de forma segura a la UI
+            g_idle_add([](gpointer d) -> gboolean {
+              auto *func = static_cast<std::function<void()> *>(d);
+              (*func)();
+              delete func;
+              return G_SOURCE_REMOVE;
+            },
+                       new std::function<void()>([url_final, rama_final, token_plain, borrar_secreto]() mutable {
+                         // ESTO EJECUTA EN EL HILO PRINCIPAL: Rellenamos las cajas de texto
+                         gtk_editable_set_text(GTK_EDITABLE(entry_url), url_final.c_str());
+                         gtk_editable_set_text(GTK_EDITABLE(entry_rama), rama_final.c_str());
+
+                         if (!token_plain.empty()) {
+                           gtk_editable_set_text(GTK_EDITABLE(entry_token), token_plain.c_str());
+                           append_log(buffer_log, "✓ Configuración cargada con éxito.\n");
+                         }
+
+                         // "Recolector de basura" manual para los datos que acaban de pasar por la UI
+                         borrar_secreto(token_plain);
+                         borrar_secreto(url_final);
+                         borrar_secreto(rama_final);
+                       }));
           }
-          if (!clave_local.empty()) {
-            OPENSSL_cleanse(&clave_local[0], clave_local.size());
-            clave_local.clear();
-          }
+        } catch (const std::exception &e) {
+          // Si algo falla (clave incorrecta, XML corrupto, etc.)
+          // Notificamos el error de forma segura en el cuadro de texto
+          std::string error_msg = std::string("⚠ Error cargando configuración: ") + e.what() + "\n";
+
+          g_idle_add([](gpointer d) -> gboolean {
+            auto *msg = static_cast<std::string *>(d);
+            append_log(buffer_log, msg->c_str());
+            delete msg;
+            return G_SOURCE_REMOVE;
+          },
+                     new std::string(error_msg));
+
+          // Forzamos la limpieza absoluta e inmediata de todas las variables intermitentes
+          borrar_secreto(token_plain);
+          borrar_secreto(url_final);
+          borrar_secreto(rama_final);
+          borrar_secreto(cfg.url);
+          borrar_secreto(cfg.tokenEncriptado);
+          borrar_secreto(cfg.rama);
+          borrar_secreto(cfg.directorio);
+        } catch (...) {
+          // Captura cualquier otro fallo desconocido irrecuperable
+          borrar_secreto(token_plain);
+          borrar_secreto(url_final);
+          borrar_secreto(rama_final);
         }
-        g_free(path);
-        g_object_unref(file);
-      }
+
+        // Al finalizar el hilo (haya ido bien o mal), destruimos la clave local clonada
+        borrar_secreto(clave_local);
+      });
+
+      t_cargar.detach();
     },
     NULL);
 }

@@ -19,6 +19,7 @@
 #include <random>
 #include <algorithm>
 #include <openssl/crypto.h>  // OPENSSL_cleanse
+#include <system_error>
 
 namespace fs = std::filesystem;
 
@@ -60,7 +61,6 @@ bool GestorGit::validarUrlRepositorio(const std::string &url) {
     size_t atPos = authorityPart.find('@');
     if (atPos != std::string::npos) {
       // Hay credenciales embebidas - potencial riesgo
-      // Permitir solo si es formato aceptable (ej. git username, no password/token)
       // Para máxima seguridad, rechazamos cualquier URL con @
       return false;
     }
@@ -90,8 +90,6 @@ std::string GestorGit::filtrarLogSensitive(const std::string &log) {
   for (const auto &par : filtros) {
     size_t pos = 0;
     while ((pos = resultado.find(par.first, pos)) != std::string::npos) {
-      // Solo reemplazar si está en contexto seguro (no exponer tokens reales)
-      // En este caso sustituimos por marcador genérico
       resultado.replace(pos, par.first.length(), par.second);
       pos += par.second.length();
     }
@@ -99,6 +97,24 @@ std::string GestorGit::filtrarLogSensitive(const std::string &log) {
 
   return resultado;
 }
+
+// RAII helper para asegurar cierre de fd y borrado del path si es necesario
+struct TempFileHandle {
+  int fd;
+  std::string path;
+  bool keep;
+  TempFileHandle(int fd_, std::string path_) : fd(fd_), path(std::move(path_)), keep(false) {}
+  ~TempFileHandle() {
+    if (fd != -1) {
+      close(fd);
+      fd = -1;
+    }
+    if (!keep && !path.empty()) {
+      std::error_code ec;
+      fs::remove(path, ec);
+    }
+  }
+};
 
 std::string GestorGit::crearScriptAskpass(const std::string &token) {
   if (token.empty()) return "";
@@ -112,59 +128,88 @@ std::string GestorGit::crearScriptAskpass(const std::string &token) {
     return "";
   }
 
+  TempFileHandle guard(fd, std::string(buf.data()));
+
   // Construir contenido del script sin exponer token en logs intermediarios
   std::string contenido = "#!/bin/sh\n";
   // Usar printf para evitar interpretaciones de escape y mantener token en memoria segura
   contenido += "printf '%s' \"" + escaparParaComillasDobles(token) + "\"\n";
 
-  ssize_t written = write(fd, contenido.data(), contenido.size());
-  if (written != (ssize_t)contenido.size()) {
-    close(fd);
-    unlink(buf.data());
-    // Intentar limpiar cualquier rastro del token en stack local
-    return "";
+  bool ok = false;
+  try {
+    ssize_t written = ::write(fd, contenido.data(), contenido.size());
+    if (written != (ssize_t)contenido.size()) {
+      throw std::system_error(errno, std::generic_category(), "write failed");
+    }
+
+    // Forzar a disco y asegurar permisos del propietario exclusivamente (700)
+    if (fsync(fd) == -1) {
+      throw std::system_error(errno, std::generic_category(), "fsync failed");
+    }
+
+    if (fchmod(fd, S_IRWXU) == -1) {
+      throw std::system_error(errno, std::generic_category(), "fchmod failed");
+    }
+
+    // Cerrar el fd ahora (TempFileHandle cerrará en su destructor si seguimos), pero queremos
+    // devolver la ruta como fichero ejecutable. Marcamos keep=true para evitar que el destructor
+    // borre el archivo y cerramos el descriptor.
+    guard.keep = true;
+    // cerramos el fd manualmente y evitamos doble close
+    if (guard.fd != -1) {
+      close(guard.fd);
+      guard.fd = -1;
+    }
+
+    ok = true;
+  } catch (...) {
+    // Guard destructor eliminará el archivo y cerrará fd
+    ok = false;
   }
 
-  fsync(fd);
-  // Asegurar permisos del propietario exclusivamente (700)
-  fchmod(fd, S_IRWXU);
-  close(fd);
+  if (!ok) return "";
 
-  // NOTA IMPORTANTE: El token debe ser limpiado por el llamador INMEDIATAMENTE DESPUÉS
-  // de llamar a esta función para minimizar su permanencia en memoria
-
-  return std::string(buf.data());
+  return guard.path;
 }
 
 void GestorGit::eliminarScriptAskpass(const std::string &rutaScript) {
-  if (!rutaScript.empty()) {
-    std::error_code ec;
+  if (rutaScript.empty()) return;
 
-    // Sobreescribir archivo con ceros antes de borrar (extra safety)
-    if (fs::exists(rutaScript)) {
-      try {
-        std::ifstream file(rutaScript, std::ios::binary);
-        std::streamsize fileSize = std::distance(
-          std::istreambuf_iterator<char>(file),
-          std::istreambuf_iterator<char>());
+  std::error_code ec;
+  if (!fs::exists(rutaScript)) return;
 
-        if (fileSize > 0) {
-          std::ofstream overwrite(rutaScript, std::ios::binary | std::ios::trunc);
-          std::vector<char> zeroes(static_cast<size_t>(fileSize), 0);
-          overwrite.write(zeroes.data(), zeroes.size());
-          overwrite.flush();
-          overwrite.close();
+  try {
+    // Intentar determinar tamaño del archivo de forma segura
+    uintmax_t fileSize = 0;
+    try {
+      fileSize = fs::file_size(rutaScript);
+    } catch (...) {
+      fileSize = 0;
+    }
 
-          // Forzar sync al disco
-          fsync(open(rutaScript.c_str(), O_RDONLY));
+    if (fileSize > 0) {
+      // Abrir para sobrescribir
+      int fd = open(rutaScript.c_str(), O_WRONLY);
+      if (fd != -1) {
+        // Preparar buffer de ceros en trozos para no consumir demasiada RAM
+        const size_t chunk = 4096;
+        std::vector<char> zeroBuf(chunk, 0);
+        uintmax_t remaining = fileSize;
+        while (remaining > 0) {
+          size_t toWrite = (remaining > chunk) ? chunk : static_cast<size_t>(remaining);
+          ssize_t w = ::write(fd, zeroBuf.data(), toWrite);
+          if (w == -1) break; // no podemos hacer mucho más
+          remaining -= static_cast<uintmax_t>(w);
         }
-      } catch (...) {
-        // Ignorar error de sobrescritura - intentaremos borrar igualmente
+        fsync(fd);
+        close(fd);
       }
     }
 
+    // Finalmente borrar el archivo
     fs::remove(rutaScript, ec);
-    unlink(rutaScript.c_str());
+  } catch (...) {
+    // Ignorar cualquier excepción - la eliminación es un intento de limpieza
   }
 }
 
@@ -179,7 +224,6 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std:
       prefijoEntorno += "GIT_ASKPASS=\"" + rutaAskpass + "\" ";
     } else {
       // Si no pudo crear askpass, advertir pero continuar sin token
-      // Esto forzará prompt interactivo si es necesario
     }
   }
 
@@ -198,7 +242,8 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std:
     if (codigoSalida) {
       *codigoSalida = -1;
     }
-    eliminarScriptAskpass(rutaAskpass);
+    // Asegurarse de eliminar askpass si fue creado
+    if (!rutaAskpass.empty()) eliminarScriptAskpass(rutaAskpass);
     return "No se pudo ejecutar el comando git";
   }
 
@@ -217,7 +262,8 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std:
     }
   }
 
-  eliminarScriptAskpass(rutaAskpass);
+  // Limpiar el script askpass creado
+  if (!rutaAskpass.empty()) eliminarScriptAskpass(rutaAskpass);
   return resultado;
 }
 
@@ -231,13 +277,11 @@ ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlReposit
     return resultado;
   }
 
-  // VALIDACIÓN CRÍTICA: Rechazar URLs con credenciales embebidas
   if (!validarUrlRepositorio(urlRepositorio)) {
     resultado.mensaje = "URL inválida: no se permiten credenciales embebidas (usar https://github.com/user/repo.git)";
     return resultado;
   }
 
-  // Si el destino existe y no está vacío, git clone normalmente falla.
   if (fs::exists(directorioDestino)) {
     bool vacio = true;
     for (auto &p : fs::directory_iterator(directorioDestino)) {
@@ -256,7 +300,6 @@ ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlReposit
   int codigoSalida = 0;
   std::string salidaRaw = ejecutarComandoGit(comando, "", token, &codigoSalida);
 
-  // FILTRAR LOG ANTES DE DEVOLVERLO
   std::string salidaFiltrada = filtrarLogSensitive(salidaRaw);
 
   resultado.salidaCompleta = salidaFiltrada;
@@ -303,7 +346,6 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
     return resultado;
   }
 
-  // Validar URL opcional si se proporciona
   if (!urlOpcional.empty() && !validarUrlRepositorio(urlOpcional)) {
     resultado.mensaje = "URL remota inválida: contiene credenciales embebidas";
     return resultado;
@@ -343,7 +385,6 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   std::string salidaCommit = filtrarLogSensitive(salidaCommitRaw);
   salidaCompleta << salidaCommit;
 
-  // Detectar si no hay cambios (no es fatal)
   bool commit_ok = (codigoSalida == 0);
   if (!commit_ok) {
     std::string lc = salidaCommit;

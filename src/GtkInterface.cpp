@@ -1,7 +1,7 @@
 /*
  * GtkInterface.cpp
  *  Created on: 30 jun 2026
- *  Author: DjSteker
+ *  Author: DjSteker - modificado para cifrado + XML
  */
 
 #include "GtkInterface.hpp"
@@ -14,7 +14,7 @@
 #include <string>
 #include <filesystem>
 #include <cstring>
-#include <openssl/crypto.h> // OPENSSL_cleanse
+#include <openssl/crypto.h>  // OPENSSL_cleanse
 
 namespace fs = std::filesystem;
 
@@ -29,7 +29,7 @@ static GtkWidget *check_guardar = nullptr;
 static GtkWidget *label_estado = nullptr;
 static GtkWidget *progress_bar = nullptr;
 static GtkTextBuffer *buffer_log = nullptr;
-static GtkWidget *text_view_log = nullptr; // referencia al GtkTextView (GTK4)
+static GtkWidget *text_view_log = nullptr;  // referencia al GtkTextView (GTK4)
 
 // Estructuras auxiliares para comunicación con el hilo principal
 struct LogData {
@@ -161,6 +161,12 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
               if (resultado.exito) {
                 append_log_async("Clonación OK. Subiendo (si procede)...\n");
                 resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
+
+                if (!token.empty()) {
+                  OPENSSL_cleanse(&token[0], token.size());
+                  token.clear();
+                  token.shrink_to_fit();  // Reducir capacidad de reserva de memoria
+                }
               }
             }
           } else {
@@ -193,7 +199,8 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
         gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 1.0);
         gtk_widget_set_sensitive(GTK_WIDGET(d), TRUE);
         return G_SOURCE_REMOVE;
-      }, boton);
+      },
+                 boton);
 
     } catch (const std::exception &e) {
       std::string err = "Excepción: ";
@@ -205,7 +212,8 @@ void run_git_task(GtkWidget *boton, gpointer user_data) {
       g_idle_add([](gpointer d) -> gboolean {
         gtk_widget_set_sensitive(GTK_WIDGET(d), TRUE);
         return G_SOURCE_REMOVE;
-      }, boton);
+      },
+                 boton);
     }
 
     // LIMPIEZA DE DATOS SENSIBLES EN MEMORIA (antes de terminar el hilo)

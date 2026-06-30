@@ -30,4 +30,3 @@ public:
 
 
 #endif /* REPOCONFIG_HPP_ */
-

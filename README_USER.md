@@ -1,5 +1,4 @@
 
-Aquí tienes un manual de usuario en español, pensado para que cualquier persona use la aplicación (Linux) y comprenda la clave maestra, rutas locales/remotas, ramas, mensajes de commit y cómo obtener el token de GitHub. Incluye ejemplos, comandos de construcción y recomendaciones de seguridad.
 
 Guía rápida — qué hace la aplicación
 - Gestor Git (GTK4) permite clonar, inicializar, commitear y hacer push de repositorios Git y opcionalmente guardar el token de acceso en un fichero XML cifrado por repositorio. La clave maestra que introduces se usa para cifrar y descifrar el token.

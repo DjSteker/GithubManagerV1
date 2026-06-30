@@ -8,9 +8,9 @@
 //============================================================================
 // Name        : GithubManager_V1
 // Author      :
-// Version     : 0.0
+// Version     :
 // Copyright   :
-// Description : file manager for the repository
+// Description :
 //$(shell pkg-config --cflags gtk4 tinyxml2 openssl)
 //$(shell pkg-config --libs gtk4 tinyxml2 openssl)
 //============================================================================
@@ -33,4 +33,5 @@ int main(int argc, char **argv) {
 
     return status;
 }
+
 

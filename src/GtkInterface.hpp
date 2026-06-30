@@ -2,7 +2,7 @@
  * GtkInterface.hpp
  *
  *  Created on: 30 jun 2026
- *      Author: usuario001
+ *      Author: DjSteker
  */
 
 #ifndef GTKINTERFACE_HPP_

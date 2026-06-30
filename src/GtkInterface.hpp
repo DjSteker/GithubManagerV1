@@ -1,18 +1,19 @@
 /*
  * GtkInterface.hpp
- *
- *  Created on: 30 jun 2026
- *      Author: DjSteker
  */
 
 #ifndef GTKINTERFACE_HPP_
 #define GTKINTERFACE_HPP_
 
-#include <string>
 #include <gtk/gtk.h>
+#include <string>
 
-// Inicializa y muestra la ventana principal
-void build_interface(GtkApplication* app);
-void setClaveMaestra(const std::string& clave);
+// La señal "activate" de GtkApplication pasa (GtkApplication*, gpointer).
+// La firma debe coincidir exactamente o el linker no encontrará el símbolo.
+void build_interface(GtkApplication *app, gpointer user_data);
+
+// Establece la clave maestra desde código externo (p. ej. desde main.cpp
+// si se pasa por argumento de línea de comandos).
+void setClaveMaestra(const std::string &clave);
 
 #endif /* GTKINTERFACE_HPP_ */

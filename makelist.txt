@@ -1,70 +1,164 @@
-# makelist.txt - Makefile compatible para compilar GithubManagerV1
-# Uso: make -f makelist.txt
-# Para usar directamente como Makefile: mv makelist.txt Makefile
+#!/usr/bin/env bash
+set -euo pipefail
 
-SHELL := /bin/bash
-CXX ?= g++
-BUILD_DIR := build
-SRC_DIR := src
-SRCS := $(wildcard $(SRC_DIR)/*.cpp)
-OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
-TARGET := GithubManager
+# scripts/install-deps.sh
+# Instala dependencias para GithubManager_V1 y verifica con pkg-config
+# Soporta: Debian/Ubuntu/Mint/Pop/Zorin/Kali/Parrot/MX/antiX, 
+# Fedora/RHEL/Alma/Rocky/Nobara, Arch/Manjaro/Garuda/EndeavourOS/BlackArch,
+# openSUSE, Alpine, Void, Gentoo, Slackware, TinyCore
 
-# Intentar obtener flags con pkg-config
-PKG_CFLAGS := $(shell pkg-config --cflags gtk4 tinyxml2 openssl 2>/dev/null || true)
-PKG_LIBS   := $(shell pkg-config --libs gtk4 tinyxml2 openssl 2>/dev/null || true)
+# --- Control de sudo ---
+SUDO=""
+if [ "${EUID:-$(id -u)}" -ne 0 ]; then
+  # Si no es root, verificamos si sudo existe
+  if command -v sudo >/dev/null 2>&1; then
+    # Si la terminal es interactiva, preguntamos al usuario
+    if [ -t 0 ]; then
+      read -r -p "Se detectó 'sudo' en el sistema. ¿Desea utilizarlo para la instalación? [s/N] " -n1 reply || reply="n"
+      echo ""
+      if [[ "$reply" =~ ^[YySs]$ ]]; then
+        SUDO="sudo"
+      else
+        echo "⚠️ Continuando sin sudo (la instalación podría fallar por falta de privilegios)."
+      fi
+    else
+      # Si no es interactiva (ej. un script/CI), usamos sudo por defecto al estar disponible
+      SUDO="sudo"
+    fi
+  else
+    echo "⚠️ 'sudo' no está instalado. Se intentará continuar sin él."
+  fi
+fi
 
-CXXFLAGS ?= -std=c++17 -O2 -Wall -Wextra $(PKG_CFLAGS)
-LDFLAGS  ?= $(PKG_LIBS)
+install_cmd() {
+  echo "→ $*"
+  if [ -n "$SUDO" ]; then
+    $SUDO "$@" || { echo "✗ Error fatal en: $*"; exit 1; }
+  else
+    "$@" || { echo "✗ Error fatal en: $*"; exit 1; }
+  fi
+}
 
-.PHONY: all build clean check-pkg-config check-deps install-deps run
+# --- Detección distro ---
+if [ -f /etc/os-release ]; then
+  . /etc/os-release
+  ID_LC="${ID,,}"
+  ID_LIKE_LC="${ID_LIKE,,}"
+else
+  ID_LC="unknown"; ID_LIKE_LC=""
+fi
 
-all: check-pkg-config build
+echo "🔍 Detectado: ${PRETTY_NAME:-$ID_LC} (ID=$ID_LC LIKE=$ID_LIKE_LC)"
+has_like() { [[ "$ID_LIKE_LC" == *"$1"* ]]; }
 
-check-pkg-config:
-	@which pkg-config >/dev/null 2>&1 || { echo "pkg-config no encontrado. Instala pkg-config y vuelve a intentar."; exit 1; }
-	@if [ -z "$(PKG_CFLAGS)" ] || [ -z "$(PKG_LIBS)" ]; then \
-	  echo "pkg-config no encontró gtk4/tinyxml2/openssl"; \
-	  echo "Ejecuta 'make -f makelist.txt check-deps' o usa scripts/install-deps.sh para instalar dependencias."; \
-	  exit 1; \
-	fi
+# --- Instalación por familia ---
+case "$ID_LC" in
+  alpine)
+    echo "Alpine Linux - apk"
+    install_cmd apk update
+    install_cmd apk add build-base pkgconf git make gtk4.0-dev tinyxml2-dev openssl-dev
+    ;;
+  void)
+    echo "Void Linux - xbps"
+    install_cmd xbps-install -Sy base-devel pkgconf git make
+    install_cmd xbps-install -Sy gtk4-devel tinyxml2-devel openssl-devel
+    ;;
+  gentoo|sabayon|funtoo)
+    echo "Gentoo-based - emerge"
+    install_cmd emerge --sync
+    install_cmd emerge -q dev-util/pkgconfig dev-vcs/git sys-devel/make x11-libs/gtk:4 dev-libs/tinyxml2 dev-libs/openssl
+    ;;
+  arch|manjaro|garuda|endeavouros|blackarch|artix|steamos)
+    echo "Arch-based ($ID_LC) - pacman"
+    install_cmd pacman -Syu --noconfirm
+    install_cmd pacman -S --noconfirm base-devel pkgconf git make gtk4 tinyxml2 openssl
+    ;;
+  fedora|nobara|rhel|centos|almalinux|rocky|cloudlinux|ol)
+    echo "RedHat-based ($ID_LC) - dnf"
+    install_cmd dnf install -y @development-tools pkgconf-pkg-config git make
+    install_cmd dnf install -y gtk4-devel tinyxml2-devel openssl-devel
+    ;;
+  opensuse*|sles)
+    echo "openSUSE - zypper"
+    install_cmd zypper refresh
+    install_cmd zypper install -y -t pattern devel_C_C++
+    install_cmd zypper install -y pkg-config git make gtk4-devel libtinyxml2-devel libopenssl-devel
+    ;;
+  debian|ubuntu|linuxmint|pop|elementary|zorin|kali|parrot|mx|antix|devuan|tails|proxmox|deepin|raspbian)
+    echo "Debian-based ($ID_LC) - apt"
+    install_cmd apt update
+    install_cmd apt install -y build-essential pkg-config git make
+    install_cmd apt install -y libgtk-4-dev libtinyxml2-dev libssl-dev
+    ;;
+  slackware)
+    echo "❌ Slackware requiere instalación manual con slackpkg/sbopkg"
+    echo "Necesitas: pkg-config, git, make, gtk4, tinyxml2, openssl (devel)"
+    exit 1
+    ;;
+  tinycore|slitaz)
+    echo "❌ Distro ligera - instala manualmente: compiletc pkg-config git"
+    exit 1
+    ;;
+  *)
+    # Fallback por ID_LIKE
+    if has_like debian; then
+      install_cmd apt update
+      install_cmd apt install -y build-essential pkg-config git make libgtk-4-dev libtinyxml2-dev libssl-dev
+    elif has_like arch; then
+      install_cmd pacman -Syu --noconfirm base-devel pkgconf git make gtk4 tinyxml2 openssl
+    elif has_like fedora || has_like rhel; then
+      install_cmd dnf install -y @development-tools pkgconf-pkg-config git make gtk4-devel tinyxml2-devel openssl-devel
+    elif has_like suse; then
+      install_cmd zypper install -y pkg-config git make gtk4-devel libtinyxml2-devel libopenssl-devel
+    elif has_like alpine; then
+      install_cmd apk add build-base pkgconf git make gtk4.0-dev tinyxml2-dev openssl-dev
+    else
+      echo "❌ Distribución no detectada: $ID_LC"
+      exit 1
+    fi
+    ;;
+esac
 
-# Build target
-build: $(TARGET)
+echo ""
+echo "✅ Verificando dependencias con pkg-config..."
 
-$(TARGET): $(OBJS) | $(BUILD_DIR)
-	@echo "Linking $@"
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LDFLAGS) -pthread
+verify_deps() {
+  command -v pkg-config >/dev/null 2>&1 || return 1
+  local cflags libs
+  cflags=$(pkg-config --cflags gtk4 tinyxml2 openssl 2>/dev/null) || return 1
+  libs=$(pkg-config --libs gtk4 tinyxml2 openssl 2>/dev/null) || return 1
+  [ -n "$cflags" ] && [ -n "$libs" ]
+}
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
-	@mkdir -p $(dir $@)
-	@echo "Compiling $<"
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+if verify_deps; then
+  echo "🎉 Dependencias OK"
+  echo "   CFLAGS: $(pkg-config --cflags gtk4 tinyxml2 openssl)"
+  echo "   LIBS:   $(pkg-config --libs gtk4 tinyxml2 openssl)"
+else
+  echo "⛔ pkg-config no encuentra gtk4, tinyxml2 u openssl"
+  echo "Revisa que instalaste los paquetes -dev/-devel correctos"
+  exit 1
+fi
 
-$(BUILD_DIR):
-	@mkdir -p $(BUILD_DIR)
-
-clean:
-	@echo "Cleaning build artefacts"
-	@rm -rf $(BUILD_DIR) $(TARGET)
-
-# Comprueba si hay paquetes mínimos (simple check de comandos/headers)
-check-deps:
-	@echo "Verificando dependencias (pkg-config)..."
-	@pkg-config --exists gtk4 tinyxml2 openssl && echo "gtk4, tinyxml2 y openssl detectados por pkg-config." || echo "Faltan paquetes detectados por pkg-config."
-
-# Lanza el script de instalación de dependencias (necesita sudo)
-install-deps:
-	@echo "Ejecutando scripts/install-deps.sh (necesitarás privilegios sudo en varias distros)..."
-	@bash scripts/install-deps.sh
-
-run: $(TARGET)
-	@./$(TARGET)
-
-# Variables útiles para debug
-show:
-	@echo "CXX=$(CXX)"
-	@echo "CXXFLAGS=$(CXXFLAGS)"
-	@echo "LDFLAGS=$(LDFLAGS)"
-	@echo "SRCS=$(SRCS)"
-	@echo "OBJS=$(OBJS)"
+# --- Prompt de compilación ---
+if command -v make >/dev/null 2>&1 && [ -t 0 ]; then
+  echo ""
+  echo "----------------------------------------"
+  read -r -p "¿Compilar ahora con 'make -f makelist.txt'? [s/N] " -n1 reply_make || reply_make="n"
+  echo
+  if [[ $reply_make =~ ^[YySs]$ ]]; then
+    echo "➡ Compilando..."
+    if make -f makelist.txt; then
+      echo ""
+      echo "✨ ¡Compilación completada!"
+      echo "Ejecutable: ./GithubManager"
+    else
+      echo "❌ Error en make. Revisa el log."
+      exit 1
+    fi
+  else
+    echo "⏭ Saltado. Compila luego con: make -f makelist.txt"
+  fi
+else
+  echo "Puedes compilar con: make -f makelist.txt"
+fi

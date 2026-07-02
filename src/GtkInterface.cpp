@@ -316,126 +316,254 @@ void Intefaz::on_clave_activate(GtkEntry *entry, gpointer user_data) {
 // RUN GIT UPLOAD (SUBIR: commit + push)
 // ===========================================================================
 void Intefaz::run_git_upload(GtkWidget *boton, gpointer user_data) {
-  (void)boton;
-  (void)user_data;
+    (void)boton;
+    (void)user_data;
 
-  set_buttons_sensitive(FALSE);
-  gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
-  append_log(buffer_log, "\n━═━═━═━═━═━═━═━═━═━═━═━═━═━═━═━═━\n");
-  append_log(buffer_log, "--- Iniciando operación SUBIR ---\n");
+    set_buttons_sensitive(FALSE);
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
+    append_log(buffer_log, "\n━═━═━═━═━═━═━═━═━═━═━═━═━═━═━═━═━\n");
+    append_log(buffer_log, "--- Iniciando operación SUBIR ---\n");
 
-  std::string clave = gtk_editable_get_text(GTK_EDITABLE(entry_clave));
-  std::string dir_path = gtk_editable_get_text(GTK_EDITABLE(entry_directorio));
-  std::string url_repo = gtk_editable_get_text(GTK_EDITABLE(entry_url));
-  std::string rama = gtk_editable_get_text(GTK_EDITABLE(entry_rama));
-  std::string mensaje = gtk_editable_get_text(GTK_EDITABLE(entry_mensaje));
-  std::string token = gtk_editable_get_text(GTK_EDITABLE(entry_token));
-  bool guardar = gtk_check_button_get_active(GTK_CHECK_BUTTON(check_guardar));
+    std::string clave = gtk_editable_get_text(GTK_EDITABLE(entry_clave));
+    std::string dir_path = gtk_editable_get_text(GTK_EDITABLE(entry_directorio));
+    std::string url_repo = gtk_editable_get_text(GTK_EDITABLE(entry_url));
+    std::string rama_input = gtk_editable_get_text(GTK_EDITABLE(entry_rama));
+    std::string mensaje = gtk_editable_get_text(GTK_EDITABLE(entry_mensaje));
+    std::string token = gtk_editable_get_text(GTK_EDITABLE(entry_token));
+    bool guardar = gtk_check_button_get_active(GTK_CHECK_BUTTON(check_guardar));
 
-  std::thread t([=]() mutable {
-    try {
-      // Validar directorio
-      if (dir_path.empty()) {
-        DatosMensaje *dm = new DatosMensaje();
-        dm->mensaje = "❌ ERROR: Directorio local vacío\n";
-        g_idle_add(idle_error_con_mensaje, dm);
-        borrarSecreto(clave);
-        borrarSecreto(token);
-        return;
-      }
+    // ========================================
+    // CORRECCIÓN 1: Rama dinámica (NO master hardcoded)
+    // ========================================
+    std::string rama_final = rama_input;
 
-      // Guardar configuración cifrada si el usuario lo marcó
-      if (guardar && !clave.empty()) {
-        ConfigRepo cfg;
-        cfg.url = url_repo;
-        cfg.directorio = dir_path;
-        cfg.rama = rama.empty() ? "main" : rama;
-        try {
-          cfg.tokenEncriptado = Cifrado::encriptar(token, clave);
-          if (GestorConfig::guardar(cfg)) {
-            append_log_async("✓ Configuración guardada en XML cifrado\n");
-          } else {
-            append_log_async("⚠ No se pudo guardar la configuración\n");
-          }
-        } catch (const std::exception &e) {
-          append_log_async("✗ Error cifrando token: " + std::string(e.what()) + "\n");
-        }
-      }
+    if (rama_final.empty()) {
+        // Intentar detectar rama actual del repositorio si existe
+        if (fs::exists(fs::path(dir_path) / ".git")) {
+            gint ec_dummy = 0;
+            std::string salida_rama = GestorGit::ejecutarComandoGit(
+                "rev-parse --abbrev-ref HEAD", dir_path, "", &ec_dummy
+            );
 
-      // Validar URL
-      if (!url_repo.empty() && !GestorGit::validarUrlRepositorio(url_repo)) {
-        DatosMensaje *dm = new DatosMensaje();
-        dm->mensaje = "❌ URL inválida: no usar credenciales embebidas\n";
-        dm->mensaje += "   Formato correcto: https://github.com/user/repo.git\n";
-        g_idle_add(idle_error_con_mensaje, dm);
-        borrarSecreto(clave);
-        borrarSecreto(token);
-        return;
-      }
+            if (!salida_rama.empty()) {
+                // Quitar newline al final
+                size_t nl_pos = salida_rama.find('\n');
+                while (nl_pos != std::string::npos) {
+                    salida_rama.erase(nl_pos, 1);
+                    nl_pos = salida_rama.find('\n');
+                }
 
-      // Decidir operación según si el directorio ya es un repo
-      ResultadoOperacionGit resultado;
-      bool esRepoNuevo = !fs::exists(fs::path(dir_path) / ".git");
+                if (!salida_rama.empty()) {
+                    rama_final = salida_rama;
 
-      if (esRepoNuevo) {
-        append_log_async("📦 Directorio sin .git detectado\n");
-
-        if (!url_repo.empty()) {
-          // Directorio existente no vacío → init + push
-          if (fs::exists(dir_path)) {
-            bool vacio = (fs::directory_iterator(dir_path) == fs::directory_iterator());
-            if (!vacio) {
-              append_log_async("   → Inicializando repo existente y subiendo...\n");
-              resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, url_repo);
-            } else {
-              // Directorio vacío → clonar directamente
-              append_log_async("   → Directorio vacío, clonando repositorio...\n");
-              resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
+                    DatosIdleLog *log_msg = new DatosIdleLog();
+                    log_msg->buf = buffer_log;
+                    log_msg->msg = g_strdup(("ℹ R detectada automáticamente: " + rama_final + "\n").c_str());
+                    g_idle_add(idle_append_log, log_msg);
+                }
             }
-          } else {
-            append_log_async("   → Creando directorio e iniciando repo...\n");
-            resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, url_repo);
-          }
-        } else {
-          append_log_async("   → Sin URL remota: inicialización local\n");
-          resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, "");
         }
-      } else {
-        append_log_async("🔄 Repositorio existente: subiendo cambios...\n");
-        resultado = GestorGit::subirCambios(dir_path, rama, mensaje, token, url_repo);
-      }
 
-      // Mostrar resultado
-      std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
-      std::string msg_final =
-        "\n──────────────────────────────────────────────\n"
-        "Resultado: "
-        + estadoStr + "\n"
-                      "Mensaje:   "
-        + resultado.mensaje + "\n\n";
-      if (!resultado.salidaCompleta.empty()) {
-        msg_final += "Salida:\n" + resultado.salidaCompleta;
-      }
-      msg_final += "──────────────────────────────────────────────\n\n";
-      append_log_async(msg_final);
+        // Fallback si aún vacío o no hay .git
+        if (rama_final.empty()) {
+            rama_final = "main";  // ← STÁNDAR MODERNO
 
-      g_idle_add(idle_restaurar_exito, nullptr);
-
-    } catch (const std::exception &e) {
-      DatosMensaje *dm = new DatosMensaje();
-      dm->mensaje = "💥 Excepción: " + std::string(e.what()) + "\n";
-      g_idle_add(idle_error_con_mensaje, dm);
+            DatosIdleLog *log_fallback = new DatosIdleLog();
+            log_fallback->buf = buffer_log;
+            log_fallback->msg = g_strdup(("ℹ Usando rama por defecto: " + rama_final + "\n").c_str());
+            g_idle_add(idle_append_log, log_fallback);
+        }
     }
 
-    borrarSecreto(clave);
-    borrarSecreto(token);
-    borrarSecreto(mensaje);
-    borrarSecreto(url_repo);
-    borrarSecreto(dir_path);
-    borrarSecreto(rama);
-  });
+    std::thread t([=]() mutable {
+        try {
+            // Validar directorio
+            if (dir_path.empty()) {
+                DatosMensaje *dm = new DatosMensaje();
+                dm->mensaje = "❌ ERROR: Directorio local vacío\n";
+                g_idle_add(idle_error_con_mensaje, dm);
+                borrarSecreto(clave);
+                borrarSecreto(token);
+                return;
+            }
 
-  t.detach();
+            // Guardar configuración cifrada si el usuario lo marcó
+            if (guardar && !clave.empty()) {
+                ConfigRepo cfg;
+                cfg.url = url_repo;
+                cfg.directorio = dir_path;
+                cfg.directorioOriginal = dir_path;  // CRÍTICO para hash lookup
+                cfg.rama = rama_final;
+
+                try {
+                    cfg.tokenEncriptado = Cifrado::encriptar(token, clave);
+
+                    if (GestorConfig::guardar(cfg)) {
+                        // ========================================
+                        // CORRECCIÓN 3A: Mensaje destacado en log
+                        // ========================================
+                        DatosIdleLog *log_box_1 = new DatosIdleLog();
+                        log_box_1->buf = buffer_log;
+                        log_box_1->msg = g_strdup("\n");
+                        g_idle_add(idle_append_log, log_box_1);
+
+                        DatosIdleLog *log_box_2 = new DatosIdleLog();
+                        log_box_2->buf = buffer_log;
+                        log_box_2->msg = g_strdup("╔════════════════════════════════════════════════════╗\n");
+                        g_idle_add(idle_append_log, log_box_2);
+
+                        DatosIdleLog *log_box_3 = new DatosIdleLog();
+                        log_box_3->buf = buffer_log;
+                        log_box_3->msg = g_strdup("║           ✅ CONFIGURACIÓN GUARDADA                ║\n");
+                        g_idle_add(idle_append_log, log_box_3);
+
+                        DatosIdleLog *log_box_4 = new DatosIdleLog();
+                        log_box_4->buf = buffer_log;
+                        log_box_4->msg = g_strdup("╚════════════════════════════════════════════════════╝\n");
+                        g_idle_add(idle_append_log, log_box_4);
+
+                        DatosIdleLog *log_filepath = new DatosIdleLog();
+                        log_filepath->buf = buffer_log;
+                        std::string xml_path = "XML cifrado: " + GestorConfig::archivoPara(dir_path) + "\n";
+                        log_filepath->msg = g_strdup(xml_path.c_str());
+                        g_idle_add(idle_append_log, log_filepath);
+
+                        DatosIdleLog *log_empty_1 = new DatosIdleLog();
+                        log_empty_1->buf = buffer_log;
+                        log_empty_1->msg = g_strdup("\n");
+                        g_idle_add(idle_append_log, log_empty_1);
+
+                        // ========================================
+                        // CORRECCIÓN 3B: Progreso momentáneo
+                        // ========================================
+                        g_idle_add([](gpointer data) -> gboolean {
+                            GtkProgressBar *pb = GTK_PROGRESS_BAR(data);
+                            gtk_progress_bar_set_fraction(pb, 1.0);
+                            gtk_label_set_text(GTK_LABEL(label_estado), "Estado: ¡Guardado!");
+
+                            GMainContext *ctx = g_main_context_default();
+                            g_main_context_iteration(ctx, FALSE);
+                            g_usleep(800000);  // 800ms visible
+
+                            gtk_progress_bar_set_fraction(pb, 0.0);
+                            gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Listo");
+
+                            return G_SOURCE_REMOVE;
+                        }, progress_bar);
+
+                        // ========================================
+                        // CORRECCIÓN 2: Actualizar UI inmediatamente
+                        // ========================================
+                        DatosConfigUI *datos_ui = new DatosConfigUI();
+                        datos_ui->url = url_repo;
+                        datos_ui->rama = rama_final;
+                        datos_ui->token = token;
+
+                        g_idle_add(idle_actualizar_config_ui, datos_ui);
+
+                        DatosIdleLog *log_updated = new DatosIdleLog();
+                        log_updated->buf = buffer_log;
+                        log_updated->msg = g_strdup("✓ Campos de interfaz actualizados automáticamente.\n\n");
+                        g_idle_add(idle_append_log, log_updated);
+
+                    } else {
+                        DatosIdleLog *log_warn = new DatosIdleLog();
+                        log_warn->buf = buffer_log;
+                        log_warn->msg = g_strdup("⚠ No se pudo guardar la configuración\n");
+                        g_idle_add(idle_append_log, log_warn);
+                    }
+                } catch (const std::exception &e) {
+                    DatosIdleLog *log_err = new DatosIdleLog();
+                    log_err->buf = buffer_log;
+                    log_err->msg = g_strdup(("✗ Error cifrando token: " + std::string(e.what()) + "\n").c_str());
+                    g_idle_add(idle_append_log, log_err);
+                }
+            } else if (guardar && clave.empty()) {
+                DatosIdleLog *log_no_key = new DatosIdleLog();
+                log_no_key->buf = buffer_log;
+                log_no_key->msg = g_strdup("⚠ Checkbox 'Guardar' activado pero sin Clave Maestra\n");
+                g_idle_add(idle_append_log, log_no_key);
+                DatosIdleLog *log_no_key_2 = new DatosIdleLog();
+                log_no_key_2->buf = buffer_log;
+                log_no_key_2->msg = g_strdup("   Ingresa una clave antes de SUBIR para persistir config.\n\n");
+                g_idle_add(idle_append_log, log_no_key_2);
+            }
+
+            // Validar URL
+            if (!url_repo.empty() && !GestorGit::validarUrlRepositorio(url_repo)) {
+                DatosMensaje *dm = new DatosMensaje();
+                dm->mensaje = "❌ URL inválida: no usar credenciales embebidas\n";
+                dm->mensaje += "   Formato correcto: https://github.com/user/repo.git\n";
+                g_idle_add(idle_error_con_mensaje, dm);
+                borrarSecreto(clave);
+                borrarSecreto(token);
+                return;
+            }
+
+            // Determinar tipo de operación según estado del repositorio
+            ResultadoOperacionGit resultado;
+            bool esRepoNuevo = !fs::exists(fs::path(dir_path) / ".git");
+
+            if (esRepoNuevo) {
+                append_log_async("📦 Directorio sin .git detectado\n");
+
+                if (!url_repo.empty()) {
+                    // Directorio existente no vacío → init + push
+                    if (fs::exists(dir_path)) {
+                        bool vacio = (fs::directory_iterator(dir_path) == fs::directory_iterator(dir_path));
+                        if (!vacio) {
+                            append_log_async("   → Inicializando repo existente y subiendo...\n");
+                            resultado = GestorGit::subirCambios(dir_path, rama_final, mensaje, token, url_repo);
+                        } else {
+                            // Directorio vacío → clonar directamente
+                            append_log_async("   → Directorio vacío, clonando repositorio...\n");
+                            resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
+                        }
+                    } else {
+                        append_log_async("   → Creando directorio e iniciando repo...\n");
+                        resultado = GestorGit::subirCambios(dir_path, rama_final, mensaje, token, "");
+                    }
+                } else {
+                    append_log_async("   → Sin URL remota: inicialización local\n");
+                    resultado = GestorGit::subirCambios(dir_path, rama_final, mensaje, token, "");
+                }
+            } else {
+                append_log_async("🔄 Repositorio existente: subiendo cambios...\n");
+                resultado = GestorGit::subirCambios(dir_path, rama_final, mensaje, token, url_repo);
+            }
+
+            // Mostrar resultado
+            std::string estadoStr = resultado.exito ? "✅ ÉXITO" : "❌ FALLIDO";
+            std::string msg_final =
+                "\n──────────────────────────────────────────────\n"
+                "Resultado: " + estadoStr + "\n"
+                "Rama usada: " + rama_final + "\n"
+                "Mensaje:   " + resultado.mensaje + "\n\n";
+
+            if (!resultado.salidaCompleta.empty()) {
+                msg_final += "Salida:\n" + resultado.salidaCompleta + "\n";
+            }
+            msg_final += "──────────────────────────────────────────────\n\n";
+
+            append_log_async(msg_final);
+
+            g_idle_add(idle_restaurar_exito, nullptr);
+
+        } catch (const std::exception &e) {
+            DatosMensaje *dm = new DatosMensaje();
+            dm->mensaje = "💥 Excepción: " + std::string(e.what()) + "\n";
+            g_idle_add(idle_error_con_mensaje, dm);
+        }
+
+        borrarSecreto(clave);
+        borrarSecreto(token);
+        borrarSecreto(mensaje);
+        borrarSecreto(url_repo);
+        borrarSecreto(dir_path);
+        borrarSecreto(rama_final);
+    });
+
+    t.detach();
 }
 
 // ===========================================================================

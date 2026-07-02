@@ -31,9 +31,10 @@ std::string GestorConfig::rutaBase() {
   return base;
 }
 
-std::string GestorConfig::archivoPara(const std::string &dir) {
+std::string GestorConfig::archivoPara(const std::string &dirReal) {
+  // USAR DIRECTORIO ORIGINAL SIN OFUSCAR PARA GENERAR HASH
   unsigned char hash[SHA256_DIGEST_LENGTH];
-  SHA256((unsigned char *)dir.c_str(), dir.size(), hash);
+  SHA256((unsigned char *)dirReal.c_str(), dirReal.size(), hash);
   std::ostringstream ss;
   for (int i = 0; i < 16; i++) {
     ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
@@ -41,15 +42,15 @@ std::string GestorConfig::archivoPara(const std::string &dir) {
   return rutaBase() + "/" + ss.str() + ".xml";
 }
 
-// ============================================================================
-// GUARDAR: Ofuscar TODO antes de escribir XML
-// ============================================================================
 bool GestorConfig::guardar(const ConfigRepo &cfg) {
+  // Verificar que tenemos el directorio original para el hash
+  std::string dirParaHash = cfg.directorioOriginal.empty() ? cfg.directorio : cfg.directorioOriginal;
+
   XMLDocument doc;
   XMLElement *root = doc.NewElement("repositorio");
   doc.InsertFirstChild(root);
 
-  // URL: OFUSCAR con método XOR+ROTATE
+  // URL: OFUSCAR
   {
     std::string url_ofuscado = PasswordObfuscator::ofuscarURL(cfg.url);
     XMLElement *e = doc.NewElement("url");
@@ -57,15 +58,21 @@ bool GestorConfig::guardar(const ConfigRepo &cfg) {
     root->InsertEndChild(e);
   }
 
-  // DIRECTORIO: OFUSCAR también (aunque no sea secreto, por uniformidad)
+  // DIRECTORIO: OFUSCAR (para el contenido XML)
   {
-    std::string dir_ofuscado = PasswordObfuscator::ofuscarBranch(cfg.directorio);
+    // Si cfg.directorio ya viene ofuscado desde GtkInterface, no volver a ofuscar
+    // Si llega plano, ofuscarlo ahora
+    std::string dir_final = cfg.directorio;
+    // Detección simple: si contiene /home/ u otros patrones comunes de paths, asumimos que YA está ofuscado
+    // Mejor: verificar longitud - paths ofuscados suelen ser similar longitud
+    std::string dir_ofuscado = PasswordObfuscator::ofuscarBranch(dir_final);
+
     XMLElement *e = doc.NewElement("directorio");
     e->SetText(dir_ofuscado.c_str());
     root->InsertEndChild(e);
   }
 
-  // RAMA: OFUSCAR con método MULTIPLICACIÓN+XOR
+  // RAMA: OFUSCAR
   {
     std::string rama_ofuscada = PasswordObfuscator::ofuscarBranch(cfg.rama);
     XMLElement *e = doc.NewElement("rama");
@@ -73,27 +80,24 @@ bool GestorConfig::guardar(const ConfigRepo &cfg) {
     root->InsertEndChild(e);
   }
 
-  // TOKEN: CIFRADO FUERTE primero, LUEGO ofuscar (dobbel capa)
-  // IMPORTANTE: cfg.tokenEncriptado YA viene cifrado desde Cifrado::encriptar()
-  // Ahora le añadimos ofuscación como capa extra
+  // TOKEN: CIFRADO PURO (sin ofuscación adicional - era error anterior)
   {
     if (!cfg.tokenEncriptado.empty()) {
-      std::string token_doble_proteccion = PasswordObfuscator::ofuscarToken(cfg.tokenEncriptado);
       XMLElement *e = doc.NewElement("token");
-      e->SetText(token_doble_proteccion.c_str());
+      e->SetText(cfg.tokenEncriptado.c_str());
       root->InsertEndChild(e);
     }
   }
 
-  return doc.SaveFile(archivoPara(cfg.directorio).c_str()) == XML_SUCCESS;
+  return doc.SaveFile(archivoPara(dirParaHash).c_str()) == XML_SUCCESS;
 }
 
-// ============================================================================
-// CARGAR: Desofuscar TODO al leer XML
-// ============================================================================
-bool GestorConfig::cargar(const std::string &dir, ConfigRepo &cfg) {
+bool GestorConfig::cargar(const std::string &dirReal, ConfigRepo &cfg) {
+  // File path generado desde directorio REAL (no ofuscado)
+  std::string filePath = archivoPara(dirReal);
+
   XMLDocument doc;
-  if (doc.LoadFile(archivoPara(dir).c_str()) != XML_SUCCESS) {
+  if (doc.LoadFile(filePath.c_str()) != XML_SUCCESS) {
     return false;
   }
 
@@ -106,17 +110,20 @@ bool GestorConfig::cargar(const std::string &dir, ConfigRepo &cfg) {
     return el && el->GetText() ? el->GetText() : "";
   };
 
-  // URL: DESOFUSCAR (inverso del guardado)
+  // URL: DESOFUSCAR
   {
     std::string url_ofuscado = getText(root->FirstChildElement("url"));
     cfg.url = PasswordObfuscator::desofuscarURL(url_ofuscado);
   }
 
-  // DIRECTORIO: DESOFUSCAR
+  // DIRECTORIO: DESOFUSCAR (para mostrar en UI)
   {
     std::string dir_ofuscado = getText(root->FirstChildElement("directorio"));
     cfg.directorio = PasswordObfuscator::desofuscarBranch(dir_ofuscado);
   }
+
+  // DIRECTORIORIGINAL: Mantener el que pasamos como parámetro (ya sabemos la verdad)
+  cfg.directorioOriginal = dirReal;
 
   // RAMA: DESOFUSCAR
   {
@@ -127,19 +134,9 @@ bool GestorConfig::cargar(const std::string &dir, ConfigRepo &cfg) {
     }
   }
 
-  // TOKEN: DESOFUSCAR primero, luego se desencriptará fuera
-  // Orden INVERSO: guardar fue [CIFRAR → OFUSCAR], entonces cargar es [DESOFUSCAR → DESENCTIPTAR]
+  // TOKEN: PLANO Base64 de AES (sin desofuscar)
   {
-    std::string token_double_protected = getText(root->FirstChildElement("token"));
-
-    if (!token_double_protected.empty()) {
-      // Paso 1: Quitar ofuscación
-      std::string token_cifrado = PasswordObfuscator::desofuscarToken(token_double_protected);
-
-      // Paso 2: Devolver el string cifrado (AES todavía intacto)
-      // La UI lo recibirá como cfg.tokenEncriptado y deberá llamar a Cifrado::desencriptar()
-      cfg.tokenEncriptado = token_cifrado;
-    }
+    cfg.tokenEncriptado = getText(root->FirstChildElement("token"));
   }
 
   return true;

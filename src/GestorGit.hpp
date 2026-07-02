@@ -9,6 +9,7 @@
 #define GESTORGIT_HPP_
 
 #include <string>
+#include <vector>
 
 struct ResultadoOperacionGit {
   bool exito;
@@ -41,11 +42,18 @@ public:
   static bool validarUrlRepositorio(const std::string &url);
   static std::string filtrarLogSensitive(const std::string &log);
 
+  static std::string ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo,
+                                        const std::string &token, int *codigoSalida);
+
+  static std::vector<std::string> obtenerRamasRemotas(const std::string &urlRepositorio,
+                                                       const std::string &token,
+                                                       std::string *mensajeError = nullptr);
+
+
 private:
   static std::string crearScriptAskpass(const std::string &token);
   static void eliminarScriptAskpass(const std::string &rutaScript);
-  static std::string ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo,
-                                        const std::string &token, int *codigoSalida);
+
 };
 
 #endif /* GESTORGIT_HPP_ */

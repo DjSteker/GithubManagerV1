@@ -7,7 +7,7 @@
 
 #include <gtk/gtk.h>
 #include <string>
-
+#include <vector>
 
 class Intefaz {
 
@@ -31,6 +31,7 @@ public:
   static void run_git_download(GtkWidget *boton, gpointer user_data);
   static void run_git_sync(GtkWidget *boton, gpointer user_data);
 
+
 private:
 
   static void append_log(GtkTextBuffer *buffer, const char *mensaje);
@@ -41,6 +42,14 @@ private:
   static void update_progress_with_message(const gchar *msg, gdouble fraction);
   static void run_git_compiler(GtkWidget *boton, gpointer user_data);
   static void cargar_configuracion_desde_xml(const std::string &directorio_path);
+
+  static void on_cargar_ramas_click(GtkButton *btn, gpointer data);
+  static gboolean idle_poblar_ramas(gpointer data);
+
+  struct DatosRamas {
+    std::vector<std::string> ramas;
+    std::string error;
+  };
 
   // Datos para idle_actualizar_config_ui
   struct DatosConfigUI {

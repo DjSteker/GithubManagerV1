@@ -340,8 +340,7 @@ ResultadoOperacionGit GestorGit::bajarCambios(const std::string &directorio, con
 
   resultado.salidaCompleta = salida;
   resultado.exito = (codigoSalida == 0);
-  resultado.mensaje = resultado.exito ? "Cambios descargados correctamente"
-                                      : "Error al descargar cambios";
+  resultado.mensaje = resultado.exito ? "Cambios descargados correctamente" : "Error al descargar cambios";
   return resultado;
 }
 
@@ -448,8 +447,7 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
   // ------------------------------------------------------------------
   std::string ramaEfectiva;
   {
-    std::string salidaRama = ejecutarComandoGit("rev-parse --abbrev-ref HEAD",
-                                                repoRoot, "", &ec);
+    std::string salidaRama = ejecutarComandoGit("rev-parse --abbrev-ref HEAD", repoRoot, "", &ec);
     ramaEfectiva = trimLineas(salidaRama);
 
     // HEAD en repos recién inicializados aún no tiene commits.
@@ -592,3 +590,67 @@ ResultadoOperacionGit GestorGit::obtenerEstado(const std::string &directorio) {
   resultado.mensaje = resultado.exito ? "Estado obtenido" : "Error obteniendo el estado del repositorio";
   return resultado;
 }
+
+std::vector<std::string> GestorGit::obtenerRamasRemotas(const std::string &urlRepositorio,
+                                                         const std::string &token,
+                                                         std::string *mensajeError) {
+  std::vector<std::string> ramas;
+
+  if (urlRepositorio.empty()) {
+    if (mensajeError) {
+      *mensajeError = "URL de repositorio vacía";
+    }
+    return ramas;
+  }
+
+  if (!validarUrlRepositorio(urlRepositorio)) {
+    if (mensajeError) {
+      *mensajeError = "URL inválida: no se permiten credenciales embebidas";
+    }
+    return ramas;
+  }
+
+  std::string comando = "ls-remote --heads \"" + escaparParaComillasDobles(urlRepositorio) + "\"";
+
+  int codigoSalida = 0;
+  std::string salida = ejecutarComandoGit(comando, "", token, &codigoSalida);
+
+  if (codigoSalida != 0) {
+    if (mensajeError) {
+      *mensajeError = filtrarLogSensitive(trimLineas(salida));
+      if (mensajeError->empty()) {
+        *mensajeError = "git ls-remote falló (código " + std::to_string(codigoSalida) + ")";
+      }
+    }
+    return ramas;
+  }
+
+  // Cada línea: "<sha>\trefs/heads/<nombre>"
+  std::istringstream stream(salida);
+  std::string linea;
+  const std::string prefijo = "refs/heads/";
+
+  while (std::getline(stream, linea)) {
+    linea = trimLineas(linea);
+    if (linea.empty()) {
+      continue;
+    }
+
+    size_t tabPos = linea.find('\t');
+    if (tabPos == std::string::npos) {
+      continue;
+    }
+
+    std::string ref = linea.substr(tabPos + 1);
+    if (ref.rfind(prefijo, 0) == 0) {
+      std::string nombreRama = ref.substr(prefijo.size());
+      if (!nombreRama.empty()) {
+        ramas.push_back(nombreRama);
+      }
+    }
+  }
+
+  return ramas;
+}
+
+

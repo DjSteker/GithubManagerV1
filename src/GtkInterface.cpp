@@ -22,7 +22,7 @@ namespace fs = std::filesystem;
 static GtkWidget *entry_clave = nullptr;
 static GtkWidget *entry_directorio = nullptr;
 static GtkWidget *entry_url = nullptr;
-static GtkWidget *entry_rama = nullptr;
+//static GtkWidget *entry_rama = nullptr;
 static GtkWidget *entry_mensaje = nullptr;
 static GtkWidget *entry_token = nullptr;
 static GtkWidget *check_guardar = nullptr;
@@ -34,6 +34,12 @@ static GtkWidget *text_view_log = nullptr;
 static GtkWidget *btn_subir = nullptr;
 static GtkWidget *btn_descargar = nullptr;
 static GtkWidget *btn_sincronizar = nullptr;
+
+
+static GtkWidget *combo_rama = nullptr;      // GtkComboBoxText con entrada editable
+static GtkWidget *entry_rama = nullptr;      // Puntero al GtkEntry interno del combo (compatibilidad)
+static GtkWidget *btn_cargar_ramas = nullptr;
+
 
 // ===========================================================================
 // Declaraciones adelantadas de todos los callbacks estáticos
@@ -99,6 +105,70 @@ struct DatosIdleLog {
   GtkTextBuffer *buf;
   char *msg;
 };
+
+void Intefaz::on_cargar_ramas_click(GtkButton *btn, gpointer data) {
+  (void)btn;
+  (void)data;
+
+  std::string url_repo = gtk_editable_get_text(GTK_EDITABLE(entry_url));
+  std::string token = gtk_editable_get_text(GTK_EDITABLE(entry_token));
+
+  if (url_repo.empty()) {
+    append_log(buffer_log, "\n⚠ Introduce primero la URL del repositorio remoto\n");
+    return;
+  }
+
+  if (!GestorGit::validarUrlRepositorio(url_repo)) {
+    append_log(buffer_log, "\n❌ URL inválida: no usar credenciales embebidas\n");
+    return;
+  }
+
+  gtk_widget_set_sensitive(btn_cargar_ramas, FALSE);
+  append_log(buffer_log, "\n🔍 Consultando ramas remotas...\n");
+
+  std::thread t([=]() mutable {
+    DatosRamas *dr = new DatosRamas();
+    std::string errorMsg;
+    dr->ramas = GestorGit::obtenerRamasRemotas(url_repo, token, &errorMsg);
+    dr->error = errorMsg;
+    g_idle_add(idle_poblar_ramas, dr);
+
+    borrarSecreto(token);
+    borrarSecreto(url_repo);
+  });
+  t.detach();
+}
+
+gboolean Intefaz::idle_poblar_ramas(gpointer data) {
+  DatosRamas *dr = static_cast<DatosRamas *>(data);
+  if (!dr) {
+    return G_SOURCE_REMOVE;
+  }
+
+  if (!dr->error.empty()) {
+    std::string msg = "❌ Error obteniendo ramas: " + dr->error + "\n";
+    append_log(buffer_log, msg.c_str());
+  } else if (dr->ramas.empty()) {
+    append_log(buffer_log, "ℹ No se encontraron ramas remotas (repositorio vacío o nuevo)\n");
+  } else {
+    // Conservar el texto actual del entry antes de tocar la lista
+    std::string texto_actual = gtk_editable_get_text(GTK_EDITABLE(entry_rama));
+
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(combo_rama));
+    for (const auto &rama : dr->ramas) {
+      gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo_rama), rama.c_str());
+    }
+
+    gtk_editable_set_text(GTK_EDITABLE(entry_rama), texto_actual.c_str());
+
+    std::string msg = "✅ " + std::to_string(dr->ramas.size()) + " ramas remotas cargadas en el desplegable\n";
+    append_log(buffer_log, msg.c_str());
+  }
+
+  gtk_widget_set_sensitive(btn_cargar_ramas, TRUE);
+  delete dr;
+  return G_SOURCE_REMOVE;
+}
 
 gboolean Intefaz::idle_append_log(gpointer data) {
   DatosIdleLog *d = static_cast<DatosIdleLog *>(data);
@@ -1085,15 +1155,42 @@ void Intefaz::build_interface(GtkApplication *app, gpointer user_data) {
   gtk_grid_attach(GTK_GRID(grid), entry_url, 1, row++, 1, 1);
 
   // ====================== RAMA =================================
+	//  GtkWidget *lbl_ram = gtk_label_new("<b>🌿 Rama:</b>");
+	//  gtk_label_set_use_markup(GTK_LABEL(lbl_ram), TRUE);
+	//  gtk_widget_set_halign(lbl_ram, GTK_ALIGN_END);
+	//  gtk_grid_attach(GTK_GRID(grid), lbl_ram, 0, row, 1, 1);
+	//
+	//  entry_rama = gtk_entry_new();
+	//  gtk_editable_set_text(GTK_EDITABLE(entry_rama), "main");
+	//  gtk_widget_set_hexpand(entry_rama, TRUE);
+	//  gtk_grid_attach(GTK_GRID(grid), entry_rama, 1, row++, 1, 1);
+
+  // ====================== RAMA =================================
   GtkWidget *lbl_ram = gtk_label_new("<b>🌿 Rama:</b>");
   gtk_label_set_use_markup(GTK_LABEL(lbl_ram), TRUE);
   gtk_widget_set_halign(lbl_ram, GTK_ALIGN_END);
   gtk_grid_attach(GTK_GRID(grid), lbl_ram, 0, row, 1, 1);
 
-  entry_rama = gtk_entry_new();
+  combo_rama = gtk_combo_box_text_new_with_entry();
+  entry_rama = gtk_combo_box_get_child(GTK_COMBO_BOX(combo_rama));  // entry interno editable
+
+  gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo_rama), "main");
   gtk_editable_set_text(GTK_EDITABLE(entry_rama), "main");
-  gtk_widget_set_hexpand(entry_rama, TRUE);
-  gtk_grid_attach(GTK_GRID(grid), entry_rama, 1, row++, 1, 1);
+  gtk_entry_set_placeholder_text(GTK_ENTRY(entry_rama), "main (o escribe una rama nueva)");
+  gtk_widget_set_tooltip_text(combo_rama,
+    "Selecciona una rama existente del desplegable\no escribe el nombre de una rama nueva para crearla");
+  gtk_widget_set_hexpand(combo_rama, TRUE);
+
+  btn_cargar_ramas = gtk_button_new_with_label("🔄");
+  gtk_widget_set_tooltip_text(btn_cargar_ramas,
+    "Cargar ramas remotas existentes desde GitHub\n(usa la URL y el Token actuales)");
+  g_signal_connect(btn_cargar_ramas, "clicked", G_CALLBACK(on_cargar_ramas_click), NULL);
+
+  GtkWidget *hbox_rama = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
+  gtk_box_append(GTK_BOX(hbox_rama), combo_rama);
+  gtk_box_append(GTK_BOX(hbox_rama), btn_cargar_ramas);
+  gtk_grid_attach(GTK_GRID(grid), hbox_rama, 1, row++, 1, 1);
+
 
   // ====================== MENSAJE COMMIT =======================
   GtkWidget *lbl_msg = gtk_label_new("<b>✏️ Mensaje Commit:</b>");

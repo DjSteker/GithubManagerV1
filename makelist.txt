@@ -1,0 +1,160 @@
+##############################################################################
+# GithubManager V1 - Makefile con Ofuscación de Contraseña en Compilación
+#
+# Características:
+#  - Genera secretos únicos para cada campo en cada compilación
+#  - Ofusca la contraseña de forma diferente por campo
+#  - Usa od + urandom para máxima entropía
+#  - Los secretos se inyectan en el header antes de compilar
+#  - Limpia los valores automáticamente tras la compilación
+##############################################################################
+
+# --- Variables ---
+CC       := g++
+CFLAGS   := -std=c++17 -Wall -Wextra -O2 $(shell pkg-config --cflags gtk4 tinyxml2 openssl)
+LDFLAGS  := $(shell pkg-config --libs gtk4 tinyxml2 openssl)
+SRCDIR   := src
+OBJDIR   := build
+TARGET   := GithubManager
+
+# Archivos fuente
+SOURCES  := $(SRCDIR)/main.cpp \
+            $(SRCDIR)/Cifrado.cpp \
+            $(SRCDIR)/PasswordObfuscator.cpp \
+            $(SRCDIR)/RepoConfig.cpp \
+            $(SRCDIR)/GestorGit.cpp \
+            $(SRCDIR)/GtkInterface.cpp
+
+OBJECTS  := $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(SOURCES))
+
+# Archivo de secretos
+SECRET_HEADER := $(SRCDIR)/PasswordObfuscator_Secrets.h
+
+##############################################################################
+# PHONY DECLARATIONS (arriba, por buena práctica)
+##############################################################################
+.PHONY: all clean clean-secrets rebuild rebuild-secrets show-secrets info help
+
+##############################################################################
+# TARGET: all (default)
+##############################################################################
+all: pre-build $(TARGET)
+
+##############################################################################
+# TARGET: pre-build - Genera los secretos únicos antes de compilar
+##############################################################################
+pre-build:
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "🔐 GithubManager V1 - Pre-build: Generando secretos de ofuscación"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@mkdir -p $(SRCDIR) $(OBJDIR)
+
+	@echo "/* Archivo generado automáticamente en compilación */" > $(SECRET_HEADER)
+	@echo "#ifndef PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER)
+	@echo "#define PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER)
+	@echo "" >> $(SECRET_HEADER)
+	@echo "/* Secreto para ofuscación del campo URL */" >> $(SECRET_HEADER)
+
+	-@VALUE=$$(od -An -N4 -tu4 /dev/urandom | awk '{print $$1 % 101 + 1000000}'); \
+	echo "#define SECRET_NUMBER_URL $$VALUE" >> $(SECRET_HEADER); \
+	echo "  ✓ SECRET_NUMBER_URL = $$VALUE"
+
+	@echo "" >> $(SECRET_HEADER)
+	@echo "/* Secreto para ofuscación del campo TOKEN */" >> $(SECRET_HEADER)
+
+	-@VALUE=$$(od -An -N4 -tu4 /dev/urandom | awk '{print $$1 % 101 + 2000000}'); \
+	echo "#define SECRET_NUMBER_TOKEN $$VALUE" >> $(SECRET_HEADER); \
+	echo "  ✓ SECRET_NUMBER_TOKEN = $$VALUE"
+
+	@echo "" >> $(SECRET_HEADER)
+	@echo "/* Secreto para ofuscación del campo BRANCH */" >> $(SECRET_HEADER)
+
+	-@VALUE=$$(od -An -N4 -tu4 /dev/urandom | awk '{print $$1 % 101 + 3000000}'); \
+	echo "#define SECRET_NUMBER_BRANCH $$VALUE" >> $(SECRET_HEADER); \
+	echo "  ✓ SECRET_NUMBER_BRANCH = $$VALUE"
+
+	@echo "" >> $(SECRET_HEADER)
+	@echo "#endif /* PASSWORDOBFUSCATOR_SECRETS_H_ */" >> $(SECRET_HEADER)
+	@echo ""
+	@echo "✅ Secretos generados en: $(SECRET_HEADER)"
+	@echo ""
+
+##############################################################################
+# Regla: Compilar objeto individual
+##############################################################################
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp $(SECRET_HEADER)
+	@mkdir -p $(OBJDIR)
+	@echo "Compilando: $<"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+##############################################################################
+# TARGET: link - Linkear ejecutable + limpiar secretos DESPUÉS
+##############################################################################
+$(TARGET): $(OBJECTS)
+	@echo ""
+	@echo "Enlazando: $(TARGET)"
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $(TARGET)
+	@echo "✨ Compilación completada: $(TARGET)"
+
+	@echo "🔒 Limpiando secretos del sistema de archivos..."
+	@if [ -f "$(SECRET_HEADER)" ]; then \
+		echo "/* Archivo generado automáticamente en compilación */" > $(SECRET_HEADER); \
+		echo "#ifndef PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER); \
+		echo "#define PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER); \
+		echo "" >> $(SECRET_HEADER); \
+		echo "#endif /* PASSWORDOBFUSCATOR_SECRETS_H_ */" >> $(SECRET_HEADER); \
+		echo "✅ Encabezado restaurado - sin valores visibles"; \
+	fi
+
+##############################################################################
+# Targets utilitarios
+##############################################################################
+clean:
+	@echo "Limpiando artefactos de compilación..."
+	rm -rf $(OBJDIR) $(TARGET)
+	-rm -f $(SECRET_HEADER)
+	@echo "✓ Limpieza completada"
+
+clean-secrets:
+	@echo "Eliminando secretos de ofuscación..."
+	-rm -f $(SECRET_HEADER)
+	@echo "✓ Secretos eliminados (se regenerarán en próxima compilación)"
+
+rebuild: clean all
+
+rebuild-secrets: clean-secrets all
+
+show-secrets:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "Secretos de Ofuscación Actuales:"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@grep "define SECRET_NUMBER" $(SECRET_HEADER) || echo "⚠️ No hay secretos generados aún"
+	@echo ""
+
+info:
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "GithubManager V1 - Información de Build"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "Compilador:    $(CC)"
+	@echo "CFLAGS:        $(CFLAGS)"
+	@echo "LDFLAGS:       $(LDFLAGS)"
+	@echo "Directorio:    $(SRCDIR)"
+	@echo "Salida:        $(TARGET)"
+	@echo "Objetos:       $(OBJDIR)/"
+	@echo "Secretos:      $(SECRET_HEADER)"
+	@echo ""
+
+help:
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "GithubManager V1 - Targets disponibles"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "  make all              - Compilar (default)"
+	@echo "  make rebuild          - Limpiar y compilar"
+	@echo "  make rebuild-secrets  - Generar nuevos secretos y compilar"
+	@echo "  make show-secrets     - Mostrar secretos actuales"
+	@echo "  make clean            - Limpiar artefactos"
+	@echo "  make clean-secrets    - Eliminar secretos (se regenerarán)"
+	@echo "  make info             - Información de compilación"
+	@echo "  make help             - Esta ayuda"
+	@echo ""

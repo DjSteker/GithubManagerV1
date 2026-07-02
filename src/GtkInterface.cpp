@@ -619,11 +619,13 @@ void Intefaz::run_git_sync(GtkWidget *boton, gpointer user_data) {
 }
 
 void Intefaz::update_progress_with_message(const gchar *msg, gdouble fraction) {
-  //  gtk_label_set_text(GTK_LABEL(label_estado), msg);
-  //  gtk_progress_bar_set_fraction(progress_bar, fraction);
-  //  while (gtk_events_pending()) {
-  //    gtk_main_iteration();
-  //  }
+    if (label_estado) {
+        gtk_label_set_text(GTK_LABEL(label_estado), msg ? msg : "Procesando...");
+    }
+    if (progress_bar) {
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), fraction);
+    }
+    g_main_context_iteration(g_main_context_default(), FALSE);
 }
 
 

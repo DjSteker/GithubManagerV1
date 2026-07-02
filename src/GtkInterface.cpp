@@ -619,214 +619,219 @@ void Intefaz::run_git_sync(GtkWidget *boton, gpointer user_data) {
 }
 
 void Intefaz::update_progress_with_message(const gchar *msg, gdouble fraction) {
-  if (label_estado) {
-    gtk_label_set_text(GTK_LABEL(label_estado), msg ? msg : "Procesando...");
-  }
-  if (progress_bar) {
-    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), fraction);
-  }
-  g_main_context_iteration(g_main_context_default(), FALSE);
+    if (label_estado) {
+        gtk_label_set_text(GTK_LABEL(label_estado), msg ? msg : "Procesando...");
+    }
+    if (progress_bar) {
+        gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), fraction);
+    }
+    g_main_context_iteration(g_main_context_default(), FALSE);
 }
 
 
 void Intefaz::run_git_compiler(GtkWidget *boton, gpointer user_data) {
-  (void)boton;
-  (void)user_data;
+    (void)boton;
+    (void)user_data;
 
-  const gchar *dir_local = gtk_editable_get_text(GTK_EDITABLE(entry_directorio));
+    const gchar *dir_local = gtk_editable_get_text(GTK_EDITABLE(entry_directorio));
 
-  if (!dir_local || strlen(dir_local) == 0) {
-    append_log(buffer_log, "⚠️ ERROR: Debes especificar un directorio local primero.\n");
-    gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Error - Sin directorio");
-    return;
-  }
+    if (!dir_local || strlen(dir_local) == 0) {
+        append_log(buffer_log, "⚠️ ERROR: Debes especificar un directorio local primero.\n");
+        gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Error - Sin directorio");
+        return;
+    }
 
-  GError *error = NULL;
-  GFile *file = g_file_new_for_path(dir_local);
-  GFileInfo *info = g_file_query_info(
-    file,
-    G_FILE_ATTRIBUTE_STANDARD_TYPE,
-    G_FILE_QUERY_INFO_NONE,
-    NULL, &error);
+    GError *error = NULL;
+    GFile *file = g_file_new_for_path(dir_local);
+    GFileInfo *info = g_file_query_info(
+        file,
+        G_FILE_ATTRIBUTE_STANDARD_TYPE,
+        G_FILE_QUERY_INFO_NONE,
+        NULL, &error
+    );
 
-  if (!info || g_file_info_get_file_type(info) != G_FILE_TYPE_DIRECTORY) {
-    append_log(buffer_log, "⚠️ ERROR: Directorio no válido o no accesible:\n");
+    if (!info || g_file_info_get_file_type(info) != G_FILE_TYPE_DIRECTORY) {
+        append_log(buffer_log, "⚠️ ERROR: Directorio no válido o no accesible:\n");
+        append_log(buffer_log, dir_local);
+        append_log(buffer_log, "\n\n");
+        gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Error - Directorio inválido");
+
+        if (error && g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
+            append_log(buffer_log, "💡 Crear directorio manualmente o seleccionar uno existente.\n");
+        }
+
+        if (error) g_clear_error(&error);  // ✅ LIMPIAR MEMORY LEAK
+        if (info) g_object_unref(info);
+        if (file) g_object_unref(file);     // ✅ Liberar también el file
+        return;
+    }
+
+    g_object_unref(info);
+    g_object_unref(file);
+    if (error) g_clear_error(&error);       // ✅ Libear error antes de continuar
+
+    append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
+    append_log(buffer_log, "📝 COMPILANDO REPOSITORIO GIT\n");
+    append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
+    append_log(buffer_log, "Directorio: ");
     append_log(buffer_log, dir_local);
     append_log(buffer_log, "\n\n");
-    gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Error - Directorio inválido");
 
-    if (error && g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
-      append_log(buffer_log, "💡 Crear directorio manualmente o seleccionar uno existente.\n");
+    gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Compilando...");
+    gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
+
+    append_log(buffer_log, "Paso 1/3: Limpieza previa...\n");
+    update_progress_with_message("Limpieza...", 0.25);
+
+    gint exit_status_clean = 0;
+    gchar *output_clean = NULL;
+    gchar *stderr_clean = NULL;
+    GError *err_spawn = NULL;
+
+    std::string clean_cmd = std::string("cd \"") + dir_local + "\" && make clean";
+
+    if (!g_spawn_command_line_sync(clean_cmd.c_str(), &output_clean, &stderr_clean,
+                                   &exit_status_clean, &err_spawn)) {
+        append_log(buffer_log, "⚠️ Advertencia: make clean falló.\n");
+        if (stderr_clean) {
+            append_log(buffer_log, stderr_clean);
+            g_free(stderr_clean);
+            stderr_clean = NULL;
+        }
+        if (err_spawn) {
+            append_log(buffer_log, err_spawn->message);
+            append_log(buffer_log, "\n");
+            g_error_free(err_spawn);
+            err_spawn = NULL;
+        }
     }
 
-    if (error) g_clear_error(&error);  // ✅ LIMPIAR MEMORY LEAK
-    if (info) g_object_unref(info);
-    if (file) g_object_unref(file);  // ✅ Liberar también el file
-    return;
-  }
-
-  g_object_unref(info);
-  g_object_unref(file);
-  if (error) g_clear_error(&error);  // ✅ Libear error antes de continuar
-
-  append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
-  append_log(buffer_log, "📝 COMPILANDO REPOSITORIO GIT\n");
-  append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
-  append_log(buffer_log, "Directorio: ");
-  append_log(buffer_log, dir_local);
-  append_log(buffer_log, "\n\n");
-
-  gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Compilando...");
-  gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(progress_bar), 0.0);
-
-  append_log(buffer_log, "Paso 1/3: Limpieza previa...\n");
-  update_progress_with_message("Limpieza...", 0.25);
-
-  gint exit_status_clean = 0;
-  gchar *output_clean = NULL;
-  gchar *stderr_clean = NULL;
-  GError *err_spawn = NULL;
-
-  std::string clean_cmd = std::string("cd \"") + dir_local + "\" && make clean";
-
-  if (!g_spawn_command_line_sync(clean_cmd.c_str(), &output_clean, &stderr_clean,
-                                 &exit_status_clean, &err_spawn)) {
-    append_log(buffer_log, "⚠️ Advertencia: make clean falló.\n");
+    if (output_clean) {
+        g_free(output_clean);
+        output_clean = NULL;
+    }
     if (stderr_clean) {
-      append_log(buffer_log, stderr_clean);
-      g_free(stderr_clean);
-      stderr_clean = NULL;
-    }
-    if (err_spawn) {
-      append_log(buffer_log, err_spawn->message);
-      append_log(buffer_log, "\n");
-      g_error_free(err_spawn);
-      err_spawn = NULL;
-    }
-  }
-
-  if (output_clean) {
-    g_free(output_clean);
-    output_clean = NULL;
-  }
-  if (stderr_clean) {
-    g_free(stderr_clean);
-    stderr_clean = NULL;
-  }
-
-  update_progress_with_message("Compilando secretos...", 0.30);
-  append_log(buffer_log, "\nPaso 2/3: Generando secretos y compilando...\n");
-  append_log(buffer_log, "(Los secretos se generan aleatoriamente cada vez)\n\n");
-
-  gint exit_status_build = 0;
-  gchar *output_build = NULL;
-  gchar *stderr_build = NULL;
-  GError *err_build = NULL;
-
-  std::string cmd_build_str = std::string("cd \"") + dir_local + "\" && make -f makelist.txt all";
-
-  if (!g_spawn_command_line_sync(cmd_build_str.c_str(), &output_build, &stderr_build,
-                                 &exit_status_build, &err_build)) {
-    append_log(buffer_log, "❌ ERROR FATAL al ejecutar make:\n");
-    if (stderr_build) {
-      append_log(buffer_log, stderr_build);
-      g_free(stderr_build);
-      stderr_build = NULL;
-    }
-    if (err_build) {
-      append_log(buffer_log, err_build->message);
-      g_error_free(err_build);
-      err_build = NULL;
+        g_free(stderr_clean);
+        stderr_clean = NULL;
     }
 
-    gtk_label_set_text(GTK_LABEL(label_estado), "Status: Fallo la compilacion");
-    update_progress_with_message("Fallo!", 1.0);
-    return;
-  }
+    update_progress_with_message("Compilando secretos...", 0.30);
+    append_log(buffer_log, "\nPaso 2/3: Generando secretos y compilando...\n");
+    append_log(buffer_log, "(Los secretos se generan aleatoriamente cada vez)\n\n");
 
-  if (output_build && strlen(output_build) > 0) {
-    gchar **lines = g_strsplit(output_build, "\n", 0);
-    for (gchar **line = lines; *line != NULL; line++) {
-      if (strstr(*line, "SECRET_NUMBER") || strstr(*line, "Compilando:") || strstr(*line, "Enlazando:") || strstr(*line, "Completada")) {
-        append_log(buffer_log, *line);
+    gint exit_status_build = 0;
+    gchar *output_build = NULL;
+    gchar *stderr_build = NULL;
+    GError *err_build = NULL;
+
+    std::string cmd_build_str = std::string("cd \"") + dir_local + "\" && make -f makelist.txt all";
+
+    if (!g_spawn_command_line_sync(cmd_build_str.c_str(), &output_build, &stderr_build,
+                                   &exit_status_build, &err_build)) {
+        append_log(buffer_log, "❌ ERROR FATAL al ejecutar make:\n");
+        if (stderr_build) {
+            append_log(buffer_log, stderr_build);
+            g_free(stderr_build);
+            stderr_build = NULL;
+        }
+        if (err_build) {
+            append_log(buffer_log, err_build->message);
+            g_error_free(err_build);
+            err_build = NULL;
+        }
+
+        gtk_label_set_text(GTK_LABEL(label_estado), "Status: Fallo la compilacion");
+        update_progress_with_message("Fallo!", 1.0);
+        return;
+    }
+
+    if (output_build && strlen(output_build) > 0) {
+        gchar **lines = g_strsplit(output_build, "\n", 0);
+        for (gchar **line = lines; *line != NULL; line++) {
+            if (strstr(*line, "SECRET_NUMBER") ||
+                strstr(*line, "Compilando:") ||
+                strstr(*line, "Enlazando:") ||
+                strstr(*line, "Completada")) {
+                append_log(buffer_log, *line);
+                append_log(buffer_log, "\n");
+            }
+        }
+        g_strfreev(lines);
+        g_free(output_build);
+        output_build = NULL;
+    }
+
+    if (stderr_build && strlen(stderr_build) > 0) {
+        append_log(buffer_log, "--- Salida STDERR ---\n");
+        append_log(buffer_log, stderr_build);
         append_log(buffer_log, "\n");
-      }
+        g_free(stderr_build);
+        stderr_build = NULL;
     }
-    g_strfreev(lines);
-    g_free(output_build);
-    output_build = NULL;
-  }
 
-  if (stderr_build && strlen(stderr_build) > 0) {
-    append_log(buffer_log, "--- Salida STDERR ---\n");
-    append_log(buffer_log, stderr_build);
-    append_log(buffer_log, "\n");
-    g_free(stderr_build);
-    stderr_build = NULL;
-  }
+    update_progress_with_message("Limpiando secretos del disco...", 0.85);
 
-  update_progress_with_message("Limpiando secretos del disco...", 0.85);
+    if (exit_status_build == 0) {
+        std::string ruta_ejecutable_str = std::string(dir_local) + "/GithubManager";
+        GFile *exec_file = g_file_new_for_path(ruta_ejecutable_str.c_str());
 
-  if (exit_status_build == 0) {
-    std::string ruta_ejecutable_str = std::string(dir_local) + "/GithubManager";
-    GFile *exec_file = g_file_new_for_path(ruta_ejecutable_str.c_str());
+        if (g_file_query_exists(exec_file, NULL)) {
+            GFileInfo *file_info = g_file_query_info(
+                exec_file,
+                G_FILE_ATTRIBUTE_STANDARD_SIZE,
+                G_FILE_QUERY_INFO_NONE,
+                NULL, NULL
+            );
 
-    if (g_file_query_exists(exec_file, NULL)) {
-      GFileInfo *file_info = g_file_query_info(
-        exec_file,
-        G_FILE_ATTRIBUTE_STANDARD_SIZE,
-        G_FILE_QUERY_INFO_NONE,
-        NULL, NULL);
+            if (file_info) {
+                guint64 tamano_bytes = g_file_info_get_size(file_info);
+                g_autofree gchar *tamano_str = g_format_size(tamano_bytes);
 
-      if (file_info) {
-        guint64 tamano_bytes = g_file_info_get_size(file_info);
-        g_autofree gchar *tamano_str = g_format_size(tamano_bytes);
+                append_log(buffer_log, "\n");
+                append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
+                append_log(buffer_log, "✅ COMPILACION COMPLETADA CON ÉXITO\n");
+                append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
+                append_log(buffer_log, "Ejecutable: ");
+                append_log(buffer_log, ruta_ejecutable_str.c_str());
+                append_log(buffer_log, "\n");
+                append_log(buffer_log, "Tamaño: ");
+                append_log(buffer_log, tamano_str);
+                append_log(buffer_log, "\n\n");
+                append_log(buffer_log, "Nota: Secretos temporales borrados del sistema de archivos.\n");
+                append_log(buffer_log, "Permanecen SOLO incrustados en el binario.\n\n");
 
-        append_log(buffer_log, "\n");
-        append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
-        append_log(buffer_log, "✅ COMPILACION COMPLETADA CON ÉXITO\n");
-        append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
-        append_log(buffer_log, "Ejecutable: ");
-        append_log(buffer_log, ruta_ejecutable_str.c_str());
-        append_log(buffer_log, "\n");
-        append_log(buffer_log, "Tamaño: ");
-        append_log(buffer_log, tamano_str);
-        append_log(buffer_log, "\n\n");
-        append_log(buffer_log, "Nota: Secretos temporales borrados del sistema de archivos.\n");
-        append_log(buffer_log, "Permanecen SOLO incrustados en el binario.\n\n");
+                g_object_unref(file_info);
+            } else {
+                append_log(buffer_log, "✅ Compilación completada (no se pudo verificar tamaño)\n\n");
+            }
 
-        g_object_unref(file_info);
-      } else {
-        append_log(buffer_log, "✅ Compilación completada (no se pudo verificar tamaño)\n\n");
-      }
+            g_object_unref(exec_file);
+            gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Compilado correctamente");
+            update_progress_with_message("Completo!", 1.0);
 
-      g_object_unref(exec_file);
-      gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Compilado correctamente");
-      update_progress_with_message("Completo!", 1.0);
+        } else {
+            append_log(buffer_log, "⚠️ Ejecutable no encontrado después de compilar.\n");
+            append_log(buffer_log, "Path esperado: ");
+            append_log(buffer_log, ruta_ejecutable_str.c_str());
+            append_log(buffer_log, "\n");
 
+            g_object_unref(exec_file);
+            gtk_label_set_text(GTK_LABEL(label_estado), "Advertencia - Sin ejecutable");
+            update_progress_with_message("Sin ejec.", 1.0);
+        }
     } else {
-      append_log(buffer_log, "⚠️ Ejecutable no encontrado después de compilar.\n");
-      append_log(buffer_log, "Path esperado: ");
-      append_log(buffer_log, ruta_ejecutable_str.c_str());
-      append_log(buffer_log, "\n");
+        append_log(buffer_log, "\n❌ LA COMPILACIÓN FALLÓ CON CÓDIGO DE SALIDA: ");
+        gchar status_str[32];
+        snprintf(status_str, sizeof(status_str), "%d", exit_status_build);
+        append_log(buffer_log, status_str);
+        append_log(buffer_log, "\n\n");
+        append_log(buffer_log, "Revisa dependencias instaladas:\n");
+        append_log(buffer_log, "- GTK4, tinyxml2, openssl\n");
+        append_log(buffer_log, "Uso: ./scripts/install-deps.sh\n\n");
 
-      g_object_unref(exec_file);
-      gtk_label_set_text(GTK_LABEL(label_estado), "Advertencia - Sin ejecutable");
-      update_progress_with_message("Sin ejec.", 1.0);
+        gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Error en compilación");
+        update_progress_with_message("Fallo!", 1.0);
     }
-  } else {
-    append_log(buffer_log, "\n❌ LA COMPILACIÓN FALLÓ CON CÓDIGO DE SALIDA: ");
-    gchar status_str[32];
-    snprintf(status_str, sizeof(status_str), "%d", exit_status_build);
-    append_log(buffer_log, status_str);
-    append_log(buffer_log, "\n\n");
-    append_log(buffer_log, "Revisa dependencias instaladas:\n");
-    append_log(buffer_log, "- GTK4, tinyxml2, openssl\n");
-    append_log(buffer_log, "Uso: ./scripts/install-deps.sh\n\n");
-
-    gtk_label_set_text(GTK_LABEL(label_estado), "Estado: Error en compilación");
-    update_progress_with_message("Fallo!", 1.0);
-  }
 }
 
 

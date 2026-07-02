@@ -23,9 +23,14 @@ struct ResultadoOperacionGit {
 // comandos, para que no quede expuesto en la lista de procesos del sistema.
 class GestorGit {
 public:
-  static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio,
-                                                 const std::string &directorioDestino,
-                                                 const std::string &token);
+	//  static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio,
+	//                                                 const std::string &directorioDestino,
+	//                                                 const std::string &token);
+
+	static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio,
+	                                               const std::string &directorioDestino,
+	                                               const std::string &token,
+	                                               const std::string &rama = "");  // NUEVO parámetro
 
   static ResultadoOperacionGit bajarCambios(const std::string &directorio,
                                             const std::string &rama,

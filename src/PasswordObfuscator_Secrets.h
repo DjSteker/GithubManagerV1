@@ -1,3 +1,10 @@
+/*
+ * PasswordObfuscator_Secrets.h
+ *  Created on: 1 jul 2026
+ *      Author: DjSteker
+ *
+ */
+
 /* Archivo generado automáticamente en compilación */
 #ifndef PASSWORDOBFUSCATOR_SECRETS_H_
 #define PASSWORDOBFUSCATOR_SECRETS_H_

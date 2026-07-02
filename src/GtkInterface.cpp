@@ -22,7 +22,6 @@ namespace fs = std::filesystem;
 static GtkWidget *entry_clave = nullptr;
 static GtkWidget *entry_directorio = nullptr;
 static GtkWidget *entry_url = nullptr;
-//static GtkWidget *entry_rama = nullptr;
 static GtkWidget *entry_mensaje = nullptr;
 static GtkWidget *entry_token = nullptr;
 static GtkWidget *check_guardar = nullptr;
@@ -39,37 +38,6 @@ static GtkWidget *btn_sincronizar = nullptr;
 static GtkWidget *combo_rama = nullptr;      // GtkComboBoxText con entrada editable
 static GtkWidget *entry_rama = nullptr;      // Puntero al GtkEntry interno del combo (compatibilidad)
 static GtkWidget *btn_cargar_ramas = nullptr;
-
-
-// ===========================================================================
-// Declaraciones adelantadas de todos los callbacks estáticos
-// ===========================================================================
-//static gboolean idle_restaurar_exito(gpointer data);
-//static gboolean idle_restaurar_error(gpointer data);
-//static gboolean idle_error_con_mensaje(gpointer data);
-//static gboolean idle_actualizar_config_ui(gpointer data);
-//static void     on_select_folder_finish(GObject *src, GAsyncResult *res, gpointer user_data);
-//static void     on_select_folder(GtkButton *btn, gpointer data);
-//static void     on_clave_activate(GtkEntry *entry, gpointer user_data);
-//static void     run_git_upload(GtkWidget *boton, gpointer user_data);
-//static void     run_git_download(GtkWidget *boton, gpointer user_data);
-//static void     run_git_sync(GtkWidget *boton, gpointer user_data);
-
-// ===========================================================================
-// Estructuras para comunicación asíncrona (idle callbacks)
-// ===========================================================================
-
-//// Datos para idle_actualizar_config_ui
-//struct DatosConfigUI {
-//  std::string url;
-//  std::string rama;
-//  std::string token;
-//};
-//
-//// Datos para idle_error_con_mensaje
-//struct DatosMensaje {
-//  std::string mensaje;
-//};
 
 // ===========================================================================
 // Función de limpieza segura de secretos en memoria
@@ -673,18 +641,17 @@ void Intefaz::run_git_download(GtkWidget *boton, gpointer user_data) {
         resultado = GestorGit::bajarCambios(dir_path, ramaEfectiva, token);
 
       } else if (!url_repo.empty()) {
-        // No hay .git pero hay URL → clonar
-        if (!GestorGit::validarUrlRepositorio(url_repo)) {
-          DatosMensaje *dm = new DatosMensaje();
-          dm->mensaje = "❌ URL inválida: no usar credenciales embebidas\n";
-          g_idle_add(idle_error_con_mensaje, dm);
-          borrarSecreto(token);
-          return;
-        }
-        append_log_async("📥 No hay repositorio local; clonando desde URL...\n");
-        resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token);
-
-      } else {
+    	  if (!GestorGit::validarUrlRepositorio(url_repo)) {
+    	    DatosMensaje *dm = new DatosMensaje();
+    	    dm->mensaje = "❌ URL inválida: no usar credenciales embebidas\n";
+    	    g_idle_add(idle_error_con_mensaje, dm);
+    	    borrarSecreto(token);
+    	    return;
+    	  }
+    	  append_log_async("📥 No hay repositorio local; clonando desde URL...\n");
+    	  std::string ramaClonar = rama.empty() ? "" : rama;   // vacío = rama por defecto del remoto
+    	  resultado = GestorGit::clonarRepositorio(url_repo, dir_path, token, ramaClonar);
+    	} else {
         // No hay .git ni URL → error
         DatosMensaje *dm = new DatosMensaje();
         dm->mensaje = "❌ El directorio no tiene repositorio git (.git ausente)\n";
@@ -1153,17 +1120,6 @@ void Intefaz::build_interface(GtkApplication *app, gpointer user_data) {
   gtk_widget_set_tooltip_text(entry_url, "HTTPS sin credenciales embebidas: https://github.com/user/repo.git");
   gtk_widget_set_hexpand(entry_url, TRUE);
   gtk_grid_attach(GTK_GRID(grid), entry_url, 1, row++, 1, 1);
-
-  // ====================== RAMA =================================
-	//  GtkWidget *lbl_ram = gtk_label_new("<b>🌿 Rama:</b>");
-	//  gtk_label_set_use_markup(GTK_LABEL(lbl_ram), TRUE);
-	//  gtk_widget_set_halign(lbl_ram, GTK_ALIGN_END);
-	//  gtk_grid_attach(GTK_GRID(grid), lbl_ram, 0, row, 1, 1);
-	//
-	//  entry_rama = gtk_entry_new();
-	//  gtk_editable_set_text(GTK_EDITABLE(entry_rama), "main");
-	//  gtk_widget_set_hexpand(entry_rama, TRUE);
-	//  gtk_grid_attach(GTK_GRID(grid), entry_rama, 1, row++, 1, 1);
 
   // ====================== RAMA =================================
   GtkWidget *lbl_ram = gtk_label_new("<b>🌿 Rama:</b>");

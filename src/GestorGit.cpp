@@ -280,7 +280,48 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std:
 // Operaciones públicas
 // ---------------------------------------------------------------------------
 
-ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlRepositorio, const std::string &directorioDestino, const std::string &token) {
+//ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlRepositorio, const std::string &directorioDestino, const std::string &token) {
+//  ResultadoOperacionGit resultado{ false, "", "" };
+//
+//  if (urlRepositorio.empty() || directorioDestino.empty()) {
+//    resultado.mensaje = "URL del repositorio o directorio destino vacíos";
+//    return resultado;
+//  }
+//
+//  if (!validarUrlRepositorio(urlRepositorio)) {
+//    resultado.mensaje = "URL inválida: no se permiten credenciales embebidas";
+//    return resultado;
+//  }
+//
+//  // Si el destino existe y no está vacío git clone fallará; informar antes.
+//  if (fs::exists(directorioDestino)) {
+//    bool vacio = true;
+//    for (const auto &_ : fs::directory_iterator(directorioDestino)) {
+//      (void)_;
+//      vacio = false;
+//      break;
+//    }
+//    if (!vacio) {
+//      resultado.mensaje = "El directorio destino existe y no está vacío; no se puede clonar allí";
+//      return resultado;
+//    }
+//  }
+//
+//  std::string comando = "clone \"" + escaparParaComillasDobles(urlRepositorio) + "\" \"" + escaparParaComillasDobles(directorioDestino) + "\"";
+//
+//  int codigoSalida = 0;
+//  std::string salida = filtrarLogSensitive(ejecutarComandoGit(comando, "", token, &codigoSalida));
+//
+//  resultado.salidaCompleta = salida;
+//  resultado.exito = (codigoSalida == 0);
+//  resultado.mensaje = resultado.exito ? "Repositorio clonado correctamente" : "Error al clonar el repositorio";
+//  return resultado;
+//}
+
+ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlRepositorio,
+                                                   const std::string &directorioDestino,
+                                                   const std::string &token,
+                                                   const std::string &rama) {
   ResultadoOperacionGit resultado{ false, "", "" };
 
   if (urlRepositorio.empty() || directorioDestino.empty()) {
@@ -293,7 +334,6 @@ ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlReposit
     return resultado;
   }
 
-  // Si el destino existe y no está vacío git clone fallará; informar antes.
   if (fs::exists(directorioDestino)) {
     bool vacio = true;
     for (const auto &_ : fs::directory_iterator(directorioDestino)) {
@@ -307,40 +347,110 @@ ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlReposit
     }
   }
 
-  std::string comando = "clone \"" + escaparParaComillasDobles(urlRepositorio) + "\" \"" + escaparParaComillasDobles(directorioDestino) + "\"";
+  std::string comando;
+  if (!rama.empty()) {
+    comando = "clone -b \"" + escaparParaComillasDobles(rama) + "\" --single-branch \""
+             + escaparParaComillasDobles(urlRepositorio) + "\" \""
+             + escaparParaComillasDobles(directorioDestino) + "\"";
+  } else {
+    comando = "clone \"" + escaparParaComillasDobles(urlRepositorio) + "\" \""
+             + escaparParaComillasDobles(directorioDestino) + "\"";
+  }
 
   int codigoSalida = 0;
   std::string salida = filtrarLogSensitive(ejecutarComandoGit(comando, "", token, &codigoSalida));
 
   resultado.salidaCompleta = salida;
   resultado.exito = (codigoSalida == 0);
-  resultado.mensaje = resultado.exito ? "Repositorio clonado correctamente" : "Error al clonar el repositorio";
+  resultado.mensaje = resultado.exito
+    ? "Repositorio clonado correctamente" + (rama.empty() ? std::string("") : " (rama '" + rama + "')")
+    : "Error al clonar el repositorio";
   return resultado;
 }
 
+//ResultadoOperacionGit GestorGit::bajarCambios(const std::string &directorio, const std::string &rama, const std::string &token) {
+//  ResultadoOperacionGit resultado{ false, "", "" };
+//
+//  if (directorio.empty()) {
+//    resultado.mensaje = "Directorio vacío";
+//    return resultado;
+//  }
+//
+//  if (!fs::exists(fs::path(directorio) / ".git")) {
+//    resultado.mensaje = "El directorio no es un repositorio git (.git no encontrado)";
+//    return resultado;
+//  }
+//
+//  std::string ramaEfectiva = rama.empty() ? "HEAD" : rama;
+//  std::string comando = "pull origin " + ramaEfectiva;
+//
+//  int codigoSalida = 0;
+//  std::string salida = filtrarLogSensitive(
+//    ejecutarComandoGit(comando, directorio, token, &codigoSalida));
+//
+//  resultado.salidaCompleta = salida;
+//  resultado.exito = (codigoSalida == 0);
+//  resultado.mensaje = resultado.exito ? "Cambios descargados correctamente" : "Error al descargar cambios";
+//  return resultado;
+//}
+
 ResultadoOperacionGit GestorGit::bajarCambios(const std::string &directorio, const std::string &rama, const std::string &token) {
   ResultadoOperacionGit resultado{ false, "", "" };
+  std::ostringstream log;
+  int ec = 0;
 
   if (directorio.empty()) {
     resultado.mensaje = "Directorio vacío";
     return resultado;
   }
-
   if (!fs::exists(fs::path(directorio) / ".git")) {
     resultado.mensaje = "El directorio no es un repositorio git (.git no encontrado)";
     return resultado;
   }
 
-  std::string ramaEfectiva = rama.empty() ? "HEAD" : rama;
-  std::string comando = "pull origin " + ramaEfectiva;
+  std::string ramaEfectiva = rama.empty() ? "main" : rama;
 
-  int codigoSalida = 0;
-  std::string salida = filtrarLogSensitive(
-    ejecutarComandoGit(comando, directorio, token, &codigoSalida));
+  // 1. Fetch específico de la rama pedida
+  log << "📥 git fetch origin " << ramaEfectiva << " ...\n";
+  std::string cmdFetch = "fetch origin " + ramaEfectiva;
+  std::string salidaFetch = filtrarLogSensitive(ejecutarComandoGit(cmdFetch, directorio, token, &ec));
+  log << salidaFetch << "\n";
 
-  resultado.salidaCompleta = salida;
-  resultado.exito = (codigoSalida == 0);
-  resultado.mensaje = resultado.exito ? "Cambios descargados correctamente" : "Error al descargar cambios";
+  if (ec != 0) {
+    resultado.mensaje = "Error al hacer fetch de la rama '" + ramaEfectiva + "' (¿existe en el remoto?)";
+    resultado.salidaCompleta = log.str();
+    return resultado;
+  }
+
+  // 2. Comprobar rama activa actual
+  std::string ramaActual = trimLineas(ejecutarComandoGit("rev-parse --abbrev-ref HEAD", directorio, "", &ec));
+
+  // 3. Cambiar a la rama pedida si no es la activa
+  if (ramaActual != ramaEfectiva) {
+    ejecutarComandoGit("show-ref --verify --quiet refs/heads/" + ramaEfectiva, directorio, "", &ec);
+    bool existeLocal = (ec == 0);
+
+    std::string cmdCheckout = existeLocal ? "checkout " + ramaEfectiva : "checkout -b " + ramaEfectiva + " origin/" + ramaEfectiva;
+
+    log << "🔀 git " << cmdCheckout << " ...\n";
+    std::string salidaCheckout = ejecutarComandoGit(cmdCheckout, directorio, "", &ec);
+    log << salidaCheckout << "\n";
+
+    if (ec != 0) {
+      resultado.mensaje = "Error al cambiar a la rama '" + ramaEfectiva + "'";
+      resultado.salidaCompleta = log.str();
+      return resultado;
+    }
+  }
+
+  // 4. Pull para traer/mezclar lo último (ya sobre la rama correcta)
+  log << "⬇ git pull origin " << ramaEfectiva << " ...\n";
+  std::string salidaPull = filtrarLogSensitive(ejecutarComandoGit("pull origin " + ramaEfectiva, directorio, token, &ec));
+  log << salidaPull << "\n";
+
+  resultado.salidaCompleta = log.str();
+  resultado.exito = (ec == 0);
+  resultado.mensaje = resultado.exito ? "Cambios descargados correctamente en la rama '" + ramaEfectiva + "'" : "Error al descargar cambios";
   return resultado;
 }
 

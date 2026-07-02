@@ -660,15 +660,15 @@ void Intefaz::run_git_compiler(GtkWidget *boton, gpointer user_data) {
             append_log(buffer_log, "💡 Crear directorio manualmente o seleccionar uno existente.\n");
         }
 
-        if (error) g_clear_error(&error);  // ✅ LIMPIAR MEMORY LEAK
-        if (info) g_object_unref(info);
-        if (file) g_object_unref(file);     // ✅ Liberar también el file
+        if (error) {g_clear_error(&error);}  // LIMPIAR MEMORY LEAK
+        if (info) {g_object_unref(info);}
+        if (file) {g_object_unref(file);}     // Liberar también el file
         return;
     }
 
     g_object_unref(info);
     g_object_unref(file);
-    if (error) g_clear_error(&error);       // ✅ Libear error antes de continuar
+    if (error) {g_clear_error(&error);}      // Libear error antes de continuar
 
     append_log(buffer_log, "═══════════════════════════════════════════════════════\n");
     append_log(buffer_log, "📝 COMPILANDO REPOSITORIO GIT\n");
@@ -690,8 +690,7 @@ void Intefaz::run_git_compiler(GtkWidget *boton, gpointer user_data) {
 
     std::string clean_cmd = std::string("cd \"") + dir_local + "\" && make clean";
 
-    if (!g_spawn_command_line_sync(clean_cmd.c_str(), &output_clean, &stderr_clean,
-                                   &exit_status_clean, &err_spawn)) {
+    if (!g_spawn_command_line_sync(clean_cmd.c_str(), &output_clean, &stderr_clean, &exit_status_clean, &err_spawn)) {
         append_log(buffer_log, "⚠️ Advertencia: make clean falló.\n");
         if (stderr_clean) {
             append_log(buffer_log, stderr_clean);
@@ -726,8 +725,7 @@ void Intefaz::run_git_compiler(GtkWidget *boton, gpointer user_data) {
 
     std::string cmd_build_str = std::string("cd \"") + dir_local + "\" && make -f makelist.txt all";
 
-    if (!g_spawn_command_line_sync(cmd_build_str.c_str(), &output_build, &stderr_build,
-                                   &exit_status_build, &err_build)) {
+    if (!g_spawn_command_line_sync(cmd_build_str.c_str(), &output_build, &stderr_build, &exit_status_build, &err_build)) {
         append_log(buffer_log, "❌ ERROR FATAL al ejecutar make:\n");
         if (stderr_build) {
             append_log(buffer_log, stderr_build);

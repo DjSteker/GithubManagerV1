@@ -36,7 +36,6 @@ static std::vector<unsigned char> b64_decode(const std::string &in) {
   return out;
 }
 
-// MEJORA CRÍTICA: Iteraciones aumentadas de 10,000 a 100,000
 constexpr int ITERACIONES_PBKDF2 = 100000;
 
 std::string Cifrado::encriptar(const std::string &txt, const std::string &pass) {

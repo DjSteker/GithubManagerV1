@@ -30,8 +30,7 @@ public:
   }
 
   // Move constructor/assignment only (no copy!)
-  SecureString(SecureString&& other) noexcept
-    : m_data(std::move(other.m_data)) {}
+  SecureString(SecureString&& other) noexcept : m_data(std::move(other.m_data)) {}
 
   SecureString& operator=(SecureString&& other) noexcept {
     if (this != &other) {

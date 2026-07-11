@@ -17,11 +17,11 @@
 
 // Base64 helpers
 static std::string b64_encode(const unsigned char *d, int len) {
-  if (len <= 0) return "";
+  if (len <= 0) {return "";}
   int out_len = 4 * ((len + 2) / 3);
   std::string out(out_len + 1, '\0');
   int r = EVP_EncodeBlock((unsigned char *)out.data(), d, len);
-  if (r < 0) throw std::runtime_error("Base64 encode error");
+  if (r < 0) {throw std::runtime_error("Base64 encode error");}
   out.resize(r);
   return out;
 }
@@ -30,9 +30,9 @@ static std::vector<unsigned char> b64_decode(const std::string &in) {
   if (in.empty()) { return {}; }
   std::vector<unsigned char> out(in.size());
   int r = EVP_DecodeBlock(out.data(), (const unsigned char *)in.c_str(), in.size());
-  if (r < 0) throw std::runtime_error("Base64 decode error");
+  if (r < 0) {throw std::runtime_error("Base64 decode error");}
   out.resize(r);
-  while (!out.empty() && out.back() == 0) out.pop_back();
+  while (!out.empty() && out.back() == 0) {out.pop_back();}
   return out;
 }
 
@@ -63,8 +63,7 @@ std::string Cifrado::encriptar(const std::string &txt, const std::string &pass) 
 
   unsigned char key[32];
   // AUMENTO DE ITERACIONES PARA MAYOR SEGURIDAD
-  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, sizeof(salt),
-                         ITERACIONES_PBKDF2, EVP_sha256(), sizeof(key), key)) {
+  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, sizeof(salt), ITERACIONES_PBKDF2, EVP_sha256(), sizeof(key), key)) {
     if (!pass_copy.empty()) {
       OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
       pass_copy.clear();
@@ -197,8 +196,7 @@ std::string Cifrado::desencriptar(const std::string &b64, const std::string &pas
 
   unsigned char key[32];
   // USANDO MISMO NUMERO DE ITERACIONES QUE ENCRYPT
-  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, 16,
-                         ITERACIONES_PBKDF2, EVP_sha256(), sizeof(key), key)) {
+  if (!PKCS5_PBKDF2_HMAC(pass_copy.c_str(), (int)pass_copy.size(), salt, 16, ITERACIONES_PBKDF2, EVP_sha256(), sizeof(key), key)) {
     if (!pass_copy.empty()) {
       OPENSSL_cleanse(&pass_copy[0], pass_copy.size());
       pass_copy.clear();

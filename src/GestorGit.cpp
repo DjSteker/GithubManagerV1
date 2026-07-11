@@ -1,5 +1,8 @@
 /*
  * GestorGit.cpp
+ *
+ * Created on: 30 jun 2026
+ *   Author: DjSteker
  */
 
 #include "GestorGit.hpp"
@@ -54,8 +57,7 @@ struct TempFileHandle {
   std::string path;
   bool keep;
 
-  TempFileHandle(int fd_, std::string path_)
-    : fd(fd_), path(std::move(path_)), keep(false) {}
+  TempFileHandle(int fd_, std::string path_) : fd(fd_), path(std::move(path_)), keep(false) {}
 
   ~TempFileHandle() {
     if (fd != -1) {
@@ -216,10 +218,7 @@ void GestorGit::eliminarScriptAskpass(const std::string &rutaScript) {
   }
 }
 
-std::string GestorGit::ejecutarComandoGit(const std::string &comando,
-                                          const std::string &directorioTrabajo,
-                                          const std::string &token,
-                                          int *codigoSalida) {
+std::string GestorGit::ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo, const std::string &token, int *codigoSalida) {
   std::string rutaAskpass;
 
   // Forzar salida en inglés independientemente del idioma del sistema.
@@ -281,9 +280,7 @@ std::string GestorGit::ejecutarComandoGit(const std::string &comando,
 // Operaciones públicas
 // ---------------------------------------------------------------------------
 
-ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlRepositorio,
-                                                   const std::string &directorioDestino,
-                                                   const std::string &token) {
+ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlRepositorio, const std::string &directorioDestino, const std::string &token) {
   ResultadoOperacionGit resultado{ false, "", "" };
 
   if (urlRepositorio.empty() || directorioDestino.empty()) {
@@ -317,14 +314,11 @@ ResultadoOperacionGit GestorGit::clonarRepositorio(const std::string &urlReposit
 
   resultado.salidaCompleta = salida;
   resultado.exito = (codigoSalida == 0);
-  resultado.mensaje = resultado.exito ? "Repositorio clonado correctamente"
-                                      : "Error al clonar el repositorio";
+  resultado.mensaje = resultado.exito ? "Repositorio clonado correctamente" : "Error al clonar el repositorio";
   return resultado;
 }
 
-ResultadoOperacionGit GestorGit::bajarCambios(const std::string &directorio,
-                                              const std::string &rama,
-                                              const std::string &token) {
+ResultadoOperacionGit GestorGit::bajarCambios(const std::string &directorio, const std::string &rama, const std::string &token) {
   ResultadoOperacionGit resultado{ false, "", "" };
 
   if (directorio.empty()) {
@@ -346,16 +340,12 @@ ResultadoOperacionGit GestorGit::bajarCambios(const std::string &directorio,
 
   resultado.salidaCompleta = salida;
   resultado.exito = (codigoSalida == 0);
-  resultado.mensaje = resultado.exito ? "Cambios descargados correctamente"
-                                      : "Error al descargar cambios";
+  resultado.mensaje = resultado.exito ? "Cambios descargados correctamente" : "Error al descargar cambios";
   return resultado;
 }
 
-ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio,
-                                              const std::string &rama,
-                                              const std::string &mensajeCommit,
-                                              const std::string &token,
-                                              const std::string &urlOpcional) {
+ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, const std::string &rama, const std::string &mensajeCommit,
+                                              const std::string &token, const std::string &urlOpcional) {
   ResultadoOperacionGit resultado{ false, "", "" };
   std::ostringstream log;
   int ec = 0;
@@ -457,8 +447,7 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio,
   // ------------------------------------------------------------------
   std::string ramaEfectiva;
   {
-    std::string salidaRama = ejecutarComandoGit("rev-parse --abbrev-ref HEAD",
-                                                repoRoot, "", &ec);
+    std::string salidaRama = ejecutarComandoGit("rev-parse --abbrev-ref HEAD", repoRoot, "", &ec);
     ramaEfectiva = trimLineas(salidaRama);
 
     // HEAD en repos recién inicializados aún no tiene commits.
@@ -559,8 +548,7 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio,
   // ------------------------------------------------------------------
   log << "📤 git push -u origin " << ramaEfectiva << " ...\n";
   std::string cmdPush = "push -u origin " + ramaEfectiva;
-  std::string salidaPush = filtrarLogSensitive(
-    ejecutarComandoGit(cmdPush, repoRoot, token, &ec));
+  std::string salidaPush = filtrarLogSensitive(ejecutarComandoGit(cmdPush, repoRoot, token, &ec));
   log << salidaPush << "\n";
 
   // Tratar "Everything up-to-date" (ec==0) y también el caso de rama
@@ -581,9 +569,7 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio,
 
   resultado.salidaCompleta = log.str();
   resultado.exito = (ec == 0);
-  resultado.mensaje = resultado.exito
-                        ? "Cambios subidos correctamente a '" + ramaEfectiva + "'"
-                        : "Error al subir cambios a '" + ramaEfectiva + "' (ver log)";
+  resultado.mensaje = resultado.exito ? "Cambios subidos correctamente a '" + ramaEfectiva + "'" : "Error al subir cambios a '" + ramaEfectiva + "' (ver log)";
 
   return resultado;
 }
@@ -601,7 +587,70 @@ ResultadoOperacionGit GestorGit::obtenerEstado(const std::string &directorio) {
 
   resultado.salidaCompleta = salida;
   resultado.exito = (ec == 0);
-  resultado.mensaje = resultado.exito ? "Estado obtenido"
-                                      : "Error obteniendo el estado del repositorio";
+  resultado.mensaje = resultado.exito ? "Estado obtenido" : "Error obteniendo el estado del repositorio";
   return resultado;
 }
+
+std::vector<std::string> GestorGit::obtenerRamasRemotas(const std::string &urlRepositorio,
+                                                         const std::string &token,
+                                                         std::string *mensajeError) {
+  std::vector<std::string> ramas;
+
+  if (urlRepositorio.empty()) {
+    if (mensajeError) {
+      *mensajeError = "URL de repositorio vacía";
+    }
+    return ramas;
+  }
+
+  if (!validarUrlRepositorio(urlRepositorio)) {
+    if (mensajeError) {
+      *mensajeError = "URL inválida: no se permiten credenciales embebidas";
+    }
+    return ramas;
+  }
+
+  std::string comando = "ls-remote --heads \"" + escaparParaComillasDobles(urlRepositorio) + "\"";
+
+  int codigoSalida = 0;
+  std::string salida = ejecutarComandoGit(comando, "", token, &codigoSalida);
+
+  if (codigoSalida != 0) {
+    if (mensajeError) {
+      *mensajeError = filtrarLogSensitive(trimLineas(salida));
+      if (mensajeError->empty()) {
+        *mensajeError = "git ls-remote falló (código " + std::to_string(codigoSalida) + ")";
+      }
+    }
+    return ramas;
+  }
+
+  // Cada línea: "<sha>\trefs/heads/<nombre>"
+  std::istringstream stream(salida);
+  std::string linea;
+  const std::string prefijo = "refs/heads/";
+
+  while (std::getline(stream, linea)) {
+    linea = trimLineas(linea);
+    if (linea.empty()) {
+      continue;
+    }
+
+    size_t tabPos = linea.find('\t');
+    if (tabPos == std::string::npos) {
+      continue;
+    }
+
+    std::string ref = linea.substr(tabPos + 1);
+    if (ref.rfind(prefijo, 0) == 0) {
+      std::string nombreRama = ref.substr(prefijo.size());
+      if (!nombreRama.empty()) {
+        ramas.push_back(nombreRama);
+      }
+    }
+  }
+
+  return ramas;
+}
+
+

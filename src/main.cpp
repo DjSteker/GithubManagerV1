@@ -20,18 +20,13 @@
 #include "GtkInterface.hpp"
 
 int main(int argc, char **argv) {
-    GtkApplication *app = gtk_application_new(
-        "com.ejemplo.gestorgit",
-        G_APPLICATION_DEFAULT_FLAGS
-    );
+  GtkApplication *app = gtk_application_new("com.ejemplo.gestorgit", G_APPLICATION_DEFAULT_FLAGS);
 
-    // Conectar la señal de activación a nuestra función de construcción de UI
-    g_signal_connect(app, "activate", G_CALLBACK(build_interface), NULL);
+  // Conectar la señal de activación a nuestra función de construcción de UI
+  g_signal_connect(app, "activate", G_CALLBACK(Intefaz::build_interface), NULL);
 
-    int status = g_application_run(G_APPLICATION(app), argc, argv);
-    g_object_unref(app);
+  int status = g_application_run(G_APPLICATION(app), argc, argv);
+  g_object_unref(app);
 
-    return status;
+  return status;
 }
-
-

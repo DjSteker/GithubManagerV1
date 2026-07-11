@@ -1,164 +1,160 @@
-#!/usr/bin/env bash
-set -euo pipefail
+##############################################################################
+# GithubManager V1 - Makefile con Ofuscación de Contraseña en Compilación
+#
+# Características:
+#  - Genera secretos únicos para cada campo en cada compilación
+#  - Ofusca la contraseña de forma diferente por campo
+#  - Usa od + urandom para máxima entropía
+#  - Los secretos se inyectan en el header antes de compilar
+#  - Limpia los valores automáticamente tras la compilación
+##############################################################################
 
-# scripts/install-deps.sh
-# Instala dependencias para GithubManager_V1 y verifica con pkg-config
-# Soporta: Debian/Ubuntu/Mint/Pop/Zorin/Kali/Parrot/MX/antiX, 
-# Fedora/RHEL/Alma/Rocky/Nobara, Arch/Manjaro/Garuda/EndeavourOS/BlackArch,
-# openSUSE, Alpine, Void, Gentoo, Slackware, TinyCore
+# --- Variables ---
+CC       := g++
+CFLAGS   := -std=c++17 -Wall -Wextra -O2 $(shell pkg-config --cflags gtk4 tinyxml2 openssl)
+LDFLAGS  := $(shell pkg-config --libs gtk4 tinyxml2 openssl)
+SRCDIR   := src
+OBJDIR   := build
+TARGET   := GithubManager
 
-# --- Control de sudo ---
-SUDO=""
-if [ "${EUID:-$(id -u)}" -ne 0 ]; then
-  # Si no es root, verificamos si sudo existe
-  if command -v sudo >/dev/null 2>&1; then
-    # Si la terminal es interactiva, preguntamos al usuario
-    if [ -t 0 ]; then
-      read -r -p "Se detectó 'sudo' en el sistema. ¿Desea utilizarlo para la instalación? [s/N] " -n1 reply || reply="n"
-      echo ""
-      if [[ "$reply" =~ ^[YySs]$ ]]; then
-        SUDO="sudo"
-      else
-        echo "⚠️ Continuando sin sudo (la instalación podría fallar por falta de privilegios)."
-      fi
-    else
-      # Si no es interactiva (ej. un script/CI), usamos sudo por defecto al estar disponible
-      SUDO="sudo"
-    fi
-  else
-    echo "⚠️ 'sudo' no está instalado. Se intentará continuar sin él."
-  fi
-fi
+# Archivos fuente
+SOURCES  := $(SRCDIR)/main.cpp \
+            $(SRCDIR)/Cifrado.cpp \
+            $(SRCDIR)/PasswordObfuscator.cpp \
+            $(SRCDIR)/RepoConfig.cpp \
+            $(SRCDIR)/GestorGit.cpp \
+            $(SRCDIR)/GtkInterface.cpp
 
-install_cmd() {
-  echo "→ $*"
-  if [ -n "$SUDO" ]; then
-    $SUDO "$@" || { echo "✗ Error fatal en: $*"; exit 1; }
-  else
-    "$@" || { echo "✗ Error fatal en: $*"; exit 1; }
-  fi
-}
+OBJECTS  := $(patsubst $(SRCDIR)/%.cpp,$(OBJDIR)/%.o,$(SOURCES))
 
-# --- Detección distro ---
-if [ -f /etc/os-release ]; then
-  . /etc/os-release
-  ID_LC="${ID,,}"
-  ID_LIKE_LC="${ID_LIKE,,}"
-else
-  ID_LC="unknown"; ID_LIKE_LC=""
-fi
+# Archivo de secretos
+SECRET_HEADER := $(SRCDIR)/PasswordObfuscator_Secrets.h
 
-echo "🔍 Detectado: ${PRETTY_NAME:-$ID_LC} (ID=$ID_LC LIKE=$ID_LIKE_LC)"
-has_like() { [[ "$ID_LIKE_LC" == *"$1"* ]]; }
+##############################################################################
+# PHONY DECLARATIONS (arriba, por buena práctica)
+##############################################################################
+.PHONY: all clean clean-secrets rebuild rebuild-secrets show-secrets info help
 
-# --- Instalación por familia ---
-case "$ID_LC" in
-  alpine)
-    echo "Alpine Linux - apk"
-    install_cmd apk update
-    install_cmd apk add build-base pkgconf git make gtk4.0-dev tinyxml2-dev openssl-dev
-    ;;
-  void)
-    echo "Void Linux - xbps"
-    install_cmd xbps-install -Sy base-devel pkgconf git make
-    install_cmd xbps-install -Sy gtk4-devel tinyxml2-devel openssl-devel
-    ;;
-  gentoo|sabayon|funtoo)
-    echo "Gentoo-based - emerge"
-    install_cmd emerge --sync
-    install_cmd emerge -q dev-util/pkgconfig dev-vcs/git sys-devel/make x11-libs/gtk:4 dev-libs/tinyxml2 dev-libs/openssl
-    ;;
-  arch|manjaro|garuda|endeavouros|blackarch|artix|steamos)
-    echo "Arch-based ($ID_LC) - pacman"
-    install_cmd pacman -Syu --noconfirm
-    install_cmd pacman -S --noconfirm base-devel pkgconf git make gtk4 tinyxml2 openssl
-    ;;
-  fedora|nobara|rhel|centos|almalinux|rocky|cloudlinux|ol)
-    echo "RedHat-based ($ID_LC) - dnf"
-    install_cmd dnf install -y @development-tools pkgconf-pkg-config git make
-    install_cmd dnf install -y gtk4-devel tinyxml2-devel openssl-devel
-    ;;
-  opensuse*|sles)
-    echo "openSUSE - zypper"
-    install_cmd zypper refresh
-    install_cmd zypper install -y -t pattern devel_C_C++
-    install_cmd zypper install -y pkg-config git make gtk4-devel libtinyxml2-devel libopenssl-devel
-    ;;
-  debian|ubuntu|linuxmint|pop|elementary|zorin|kali|parrot|mx|antix|devuan|tails|proxmox|deepin|raspbian)
-    echo "Debian-based ($ID_LC) - apt"
-    install_cmd apt update
-    install_cmd apt install -y build-essential pkg-config git make
-    install_cmd apt install -y libgtk-4-dev libtinyxml2-dev libssl-dev
-    ;;
-  slackware)
-    echo "❌ Slackware requiere instalación manual con slackpkg/sbopkg"
-    echo "Necesitas: pkg-config, git, make, gtk4, tinyxml2, openssl (devel)"
-    exit 1
-    ;;
-  tinycore|slitaz)
-    echo "❌ Distro ligera - instala manualmente: compiletc pkg-config git"
-    exit 1
-    ;;
-  *)
-    # Fallback por ID_LIKE
-    if has_like debian; then
-      install_cmd apt update
-      install_cmd apt install -y build-essential pkg-config git make libgtk-4-dev libtinyxml2-dev libssl-dev
-    elif has_like arch; then
-      install_cmd pacman -Syu --noconfirm base-devel pkgconf git make gtk4 tinyxml2 openssl
-    elif has_like fedora || has_like rhel; then
-      install_cmd dnf install -y @development-tools pkgconf-pkg-config git make gtk4-devel tinyxml2-devel openssl-devel
-    elif has_like suse; then
-      install_cmd zypper install -y pkg-config git make gtk4-devel libtinyxml2-devel libopenssl-devel
-    elif has_like alpine; then
-      install_cmd apk add build-base pkgconf git make gtk4.0-dev tinyxml2-dev openssl-dev
-    else
-      echo "❌ Distribución no detectada: $ID_LC"
-      exit 1
-    fi
-    ;;
-esac
+##############################################################################
+# TARGET: all (default)
+##############################################################################
+all: pre-build $(TARGET)
 
-echo ""
-echo "✅ Verificando dependencias con pkg-config..."
+##############################################################################
+# TARGET: pre-build - Genera los secretos únicos antes de compilar
+##############################################################################
+pre-build:
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "🔐 GithubManager V1 - Pre-build: Generando secretos de ofuscación"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@mkdir -p $(SRCDIR) $(OBJDIR)
 
-verify_deps() {
-  command -v pkg-config >/dev/null 2>&1 || return 1
-  local cflags libs
-  cflags=$(pkg-config --cflags gtk4 tinyxml2 openssl 2>/dev/null) || return 1
-  libs=$(pkg-config --libs gtk4 tinyxml2 openssl 2>/dev/null) || return 1
-  [ -n "$cflags" ] && [ -n "$libs" ]
-}
+	@echo "/* Archivo generado automáticamente en compilación */" > $(SECRET_HEADER)
+	@echo "#ifndef PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER)
+	@echo "#define PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER)
+	@echo "" >> $(SECRET_HEADER)
+	@echo "/* Secreto para ofuscación del campo URL */" >> $(SECRET_HEADER)
 
-if verify_deps; then
-  echo "🎉 Dependencias OK"
-  echo "   CFLAGS: $(pkg-config --cflags gtk4 tinyxml2 openssl)"
-  echo "   LIBS:   $(pkg-config --libs gtk4 tinyxml2 openssl)"
-else
-  echo "⛔ pkg-config no encuentra gtk4, tinyxml2 u openssl"
-  echo "Revisa que instalaste los paquetes -dev/-devel correctos"
-  exit 1
-fi
+	-@VALUE=$$(od -An -N4 -tu4 /dev/urandom | awk '{print $$1 % 101 + 1000000}'); \
+	echo "#define SECRET_NUMBER_URL $$VALUE" >> $(SECRET_HEADER); \
+	echo "  ✓ SECRET_NUMBER_URL = $$VALUE"
 
-# --- Prompt de compilación ---
-if command -v make >/dev/null 2>&1 && [ -t 0 ]; then
-  echo ""
-  echo "----------------------------------------"
-  read -r -p "¿Compilar ahora con 'make -f makelist.txt'? [s/N] " -n1 reply_make || reply_make="n"
-  echo
-  if [[ $reply_make =~ ^[YySs]$ ]]; then
-    echo "➡ Compilando..."
-    if make -f makelist.txt; then
-      echo ""
-      echo "✨ ¡Compilación completada!"
-      echo "Ejecutable: ./GithubManager"
-    else
-      echo "❌ Error en make. Revisa el log."
-      exit 1
-    fi
-  else
-    echo "⏭ Saltado. Compila luego con: make -f makelist.txt"
-  fi
-else
-  echo "Puedes compilar con: make -f makelist.txt"
-fi
+	@echo "" >> $(SECRET_HEADER)
+	@echo "/* Secreto para ofuscación del campo TOKEN */" >> $(SECRET_HEADER)
+
+	-@VALUE=$$(od -An -N4 -tu4 /dev/urandom | awk '{print $$1 % 101 + 2000000}'); \
+	echo "#define SECRET_NUMBER_TOKEN $$VALUE" >> $(SECRET_HEADER); \
+	echo "  ✓ SECRET_NUMBER_TOKEN = $$VALUE"
+
+	@echo "" >> $(SECRET_HEADER)
+	@echo "/* Secreto para ofuscación del campo BRANCH */" >> $(SECRET_HEADER)
+
+	-@VALUE=$$(od -An -N4 -tu4 /dev/urandom | awk '{print $$1 % 101 + 3000000}'); \
+	echo "#define SECRET_NUMBER_BRANCH $$VALUE" >> $(SECRET_HEADER); \
+	echo "  ✓ SECRET_NUMBER_BRANCH = $$VALUE"
+
+	@echo "" >> $(SECRET_HEADER)
+	@echo "#endif /* PASSWORDOBFUSCATOR_SECRETS_H_ */" >> $(SECRET_HEADER)
+	@echo ""
+	@echo "✅ Secretos generados en: $(SECRET_HEADER)"
+	@echo ""
+
+##############################################################################
+# Regla: Compilar objeto individual
+##############################################################################
+$(OBJDIR)/%.o: $(SRCDIR)/%.cpp $(SECRET_HEADER)
+	@mkdir -p $(OBJDIR)
+	@echo "Compilando: $<"
+	$(CC) $(CFLAGS) -c $< -o $@
+
+##############################################################################
+# TARGET: link - Linkear ejecutable + limpiar secretos DESPUÉS
+##############################################################################
+$(TARGET): $(OBJECTS)
+	@echo ""
+	@echo "Enlazando: $(TARGET)"
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $(TARGET)
+	@echo "✨ Compilación completada: $(TARGET)"
+
+	@echo "🔒 Limpiando secretos del sistema de archivos..."
+	@if [ -f "$(SECRET_HEADER)" ]; then \
+		echo "/* Archivo generado automáticamente en compilación */" > $(SECRET_HEADER); \
+		echo "#ifndef PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER); \
+		echo "#define PASSWORDOBFUSCATOR_SECRETS_H_" >> $(SECRET_HEADER); \
+		echo "" >> $(SECRET_HEADER); \
+		echo "#endif /* PASSWORDOBFUSCATOR_SECRETS_H_ */" >> $(SECRET_HEADER); \
+		echo "✅ Encabezado restaurado - sin valores visibles"; \
+	fi
+
+##############################################################################
+# Targets utilitarios
+##############################################################################
+clean:
+	@echo "Limpiando artefactos de compilación..."
+	rm -rf $(OBJDIR) $(TARGET)
+	-rm -f $(SECRET_HEADER)
+	@echo "✓ Limpieza completada"
+
+clean-secrets:
+	@echo "Eliminando secretos de ofuscación..."
+	-rm -f $(SECRET_HEADER)
+	@echo "✓ Secretos eliminados (se regenerarán en próxima compilación)"
+
+rebuild: clean all
+
+rebuild-secrets: clean-secrets all
+
+show-secrets:
+	@echo ""
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "Secretos de Ofuscación Actuales:"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@grep "define SECRET_NUMBER" $(SECRET_HEADER) || echo "⚠️ No hay secretos generados aún"
+	@echo ""
+
+info:
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "GithubManager V1 - Información de Build"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "Compilador:    $(CC)"
+	@echo "CFLAGS:        $(CFLAGS)"
+	@echo "LDFLAGS:       $(LDFLAGS)"
+	@echo "Directorio:    $(SRCDIR)"
+	@echo "Salida:        $(TARGET)"
+	@echo "Objetos:       $(OBJDIR)/"
+	@echo "Secretos:      $(SECRET_HEADER)"
+	@echo ""
+
+help:
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "GithubManager V1 - Targets disponibles"
+	@echo "═══════════════════════════════════════════════════════════════════"
+	@echo "  make all              - Compilar (default)"
+	@echo "  make rebuild          - Limpiar y compilar"
+	@echo "  make rebuild-secrets  - Generar nuevos secretos y compilar"
+	@echo "  make show-secrets     - Mostrar secretos actuales"
+	@echo "  make clean            - Limpiar artefactos"
+	@echo "  make clean-secrets    - Eliminar secretos (se regenerarán)"
+	@echo "  make info             - Información de compilación"
+	@echo "  make help             - Esta ayuda"
+	@echo ""

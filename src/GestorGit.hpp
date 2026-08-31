@@ -12,9 +12,9 @@
 #include <vector>
 
 struct ResultadoOperacionGit {
-  bool exito;
-  std::string mensaje;
-  std::string salidaCompleta;
+	bool exito;
+	std::string mensaje;
+	std::string salidaCompleta;
 };
 
 // Envuelve las operaciones git necesarias (clonar, bajar/pull, subir/push,
@@ -23,36 +23,30 @@ struct ResultadoOperacionGit {
 // comandos, para que no quede expuesto en la lista de procesos del sistema.
 class GestorGit {
 public:
-  static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio,
-                                                 const std::string &directorioDestino,
-                                                 const std::string &token);
+	//  static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio,
+	//                                                 const std::string &directorioDestino,
+	//                                                 const std::string &token);
 
-  static ResultadoOperacionGit bajarCambios(const std::string &directorio,
-                                            const std::string &rama,
-                                            const std::string &token);
+	static ResultadoOperacionGit clonarRepositorio(const std::string &urlRepositorio, const std::string &directorioDestino, const std::string &token, const std::string &rama = "");
 
-  // Nota: urlOpcional se usa cuando se inicializa un repo vacío y queremos agregar remote origin
-  static ResultadoOperacionGit subirCambios(const std::string &directorio, const std::string &rama,
-                                            const std::string &mensajeCommit, const std::string &token,
-                                            const std::string &urlOpcional = "");
+	static ResultadoOperacionGit bajarCambios(const std::string &directorio, const std::string &rama, const std::string &token);
 
-  static ResultadoOperacionGit obtenerEstado(const std::string &directorio);
+	// Nota: urlOpcional se usa cuando se inicializa un repo vacío y queremos agregar remote origin
+	static ResultadoOperacionGit subirCambios(const std::string &directorio, const std::string &rama, const std::string &mensajeCommit, const std::string &token, const std::string &urlOpcional = "");
 
-  // Métodos auxiliares de validación
-  static bool validarUrlRepositorio(const std::string &url);
-  static std::string filtrarLogSensitive(const std::string &log);
+	static ResultadoOperacionGit obtenerEstado(const std::string &directorio);
 
-  static std::string ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo,
-                                        const std::string &token, int *codigoSalida);
+	// Métodos auxiliares de validación
+	static bool validarUrlRepositorio(const std::string &url);
+	static std::string filtrarLogSensitive(const std::string &log);
 
-  static std::vector<std::string> obtenerRamasRemotas(const std::string &urlRepositorio,
-                                                       const std::string &token,
-                                                       std::string *mensajeError = nullptr);
+	static std::string ejecutarComandoGit(const std::string &comando, const std::string &directorioTrabajo, const std::string &token, int *codigoSalida);
 
+	static std::vector<std::string> obtenerRamasRemotas(const std::string &urlRepositorio, const std::string &token, std::string *mensajeError = nullptr);
 
 private:
-  static std::string crearScriptAskpass(const std::string &token);
-  static void eliminarScriptAskpass(const std::string &rutaScript);
+	static std::string crearScriptAskpass(const std::string &token);
+	static void eliminarScriptAskpass(const std::string &rutaScript);
 
 };
 

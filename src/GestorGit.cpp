@@ -555,16 +555,8 @@ ResultadoOperacionGit GestorGit::subirCambios(const std::string &directorio, con
 	}
 
 	// Si el usuario especificó una rama distinta y existe localmente, usarla.
-	//  if (!rama.empty() && rama != ramaEfectiva) {
-	//    std::string cmdCheck = "show-ref --verify --quiet refs/heads/" + rama;
-	//    ejecutarComandoGit(cmdCheck, repoRoot, "", &ec);
-	//    if (ec == 0) {
-	//      ramaEfectiva = rama;
-	//    } else {
-	//      log << "⚠ Rama '" << rama << "' no existe; usando '" << ramaEfectiva << "'\n";
-	//    }
-	//  }
-
+	// Si el usuario especificó una rama distinta a la actual, cambiar a ella
+	// (o crearla si no existe todavía localmente).
 	if (!rama.empty() && rama != ramaEfectiva) {
 		std::string cmdCheck = "show-ref --verify --quiet refs/heads/" + rama;
 		ejecutarComandoGit(cmdCheck, repoRoot, "", &ec);

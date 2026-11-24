@@ -6,7 +6,7 @@
  */
 
 //============================================================================
-// Name        : GithubManager_V1
+// Name        : GithubManager_V2
 // Author      :
 // Version     :
 // Copyright   :
